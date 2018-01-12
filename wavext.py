@@ -1,5 +1,4 @@
 import scipy.io.wavfile
-import math
 
 rate, data = scipy.io.wavfile.read('/home/pietro/Desktop/babble recognizer/AUDIO/ATT/ATT000804_AB_01.wav')
 i = 0
@@ -10,4 +9,7 @@ while i < 1000: #len(data):
 print (str(data.shape))
 print (str(rate))
 print (str(len(data)))
+
+
+#test comment
 
