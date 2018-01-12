@@ -12,4 +12,7 @@ print (str(len(data)))
 
 
 #test comment
+#TEST comment 2
+
+print "TEST"
 
