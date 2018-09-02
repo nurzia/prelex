@@ -11,6 +11,7 @@ from keras.utils import to_categorical
 
 import preprocess
 import modelling
+import utils
 
 def main():
     parser = argparse.ArgumentParser()
@@ -22,21 +23,21 @@ def main():
     parser.add_argument('--model_prefix', type=str, default='model')
 
     # preprocessing
-    parser.add_argument('--frames', type=int, default=25)
+    parser.add_argument('--frames', type=int, default=50) # 256
     parser.add_argument('--seed', type=int, default=26711)
-    parser.add_argument('--hop', type=int, default=25)
-    parser.add_argument('--max_freq', type=int, default=8000)
-    parser.add_argument('--max_children', type=int, default=0)
+    parser.add_argument('--hop', type=int, default=50) # 128
+    parser.add_argument('--num_freq', type=int, default=128)
+    parser.add_argument('--max_children', type=int, default=1)
     parser.add_argument('--max_timesteps', type=int, default=None)
     parser.add_argument('--preprocess', action='store_true', default=False)
 
     # model
-    parser.add_argument('--bptt', type=int, default=30)
+    parser.add_argument('--bptt', type=int, default=25)
     parser.add_argument('--train_size', type=float, default=.75)
-    parser.add_argument('--batch_size', type=int, default=64)
+    parser.add_argument('--batch_size', type=int, default=124)
     parser.add_argument('--epochs', type=int, default=30)
     parser.add_argument('--num_layers', type=int, default=2)
-    parser.add_argument('--hidden_dim', type=int, default=512)
+    parser.add_argument('--hidden_dim', type=int, default=256)
     parser.add_argument('--lr', type=float, default=.001)
     
 
@@ -56,11 +57,12 @@ def main():
             for audio_file in glob.glob(f'{audio_folder}/*.wav'):
                 print(audio_file)
                 # extract audio
-                wave, sample_rate = preprocess.load_file(audio_file)
-                spectrogram = preprocess.build_spectrogram(wave, sample_rate,
-                                                          window=args.frames,
-                                                          step=args.hop,
-                                                          max_freq=args.max_freq)
+                wave, sample_rate = utils.load_file_(audio_file)
+                spectrogram = utils.spectrogram_(wave, sample_rate,
+                                                      num_frames=args.frames,
+                                                      hop_length=args.hop,
+                                                      num_freq=args.num_freq)
+                print(spectrogram.shape)
                 # extract transcription
                 bn = os.path.basename(audio_file).replace('.wav', '')
                 p = f'{args.chat_dir}/{child_name}/{bn}_S.cha'
@@ -109,6 +111,9 @@ def main():
     X = X[keep, :, :]
     Y = Y[keep, :]
 
+    print('1-ratio: ', Y.sum() / len(Y.ravel()))
+
+
     # split train from rest (dev + test)
     sums = [int(b.sum() > 0) for b in Y]
     splits = train_test_split(X, Y, train_size=args.train_size,
@@ -130,8 +135,11 @@ def main():
                                   recurrent_dim=args.hidden_dim,
                                   lr=args.lr, num_layers=args.num_layers)
     model.summary()
-    model.fit(X_train, Y_train_cat, epochs=args.epochs,
+    try:
+        model.fit(X_train, Y_train_cat, epochs=args.epochs,
               validation_data=(X_dev, Y_dev_cat))
+    except KeyboardInterrupt:
+        pass
 
     predictions = model.predict(X_dev).argmax(axis=-1).ravel()
     print(classification_report(Y_dev.ravel(), predictions))
