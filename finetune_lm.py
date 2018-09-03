@@ -11,10 +11,35 @@ from keras.layers import *
 from keras.models import  Model
 from keras.callbacks import ModelCheckpoint, ReduceLROnPlateau
 from keras.models import load_model
+import keras.backend as K
+import tensorflow as tf
 
 import preprocess
 import utils
 import modelling
+
+
+def combine_(x):
+    forward, backward = x
+
+    # reverse the output:
+    backward = backward[:, ::-1, :]
+
+    left_pattern = [[0, 0], [1, 0], [0, 0]]
+    forward = tf.pad(forward, left_pattern,
+                     mode='CONSTANT', constant_values=0)
+
+    right_pattern = [[0, 0], [0, 1], [0, 0]]
+    backward = tf.pad(backward, right_pattern,
+                      mode='CONSTANT', constant_values=0)
+
+    return Concatenate(axis=-1)([forward, backward])
+
+
+def combine_output_shape(input_shape):
+    shape = list(input_shape[0])
+    shape[-1] *= 2
+    return tuple(shape)    
 
 
 def main():
@@ -39,7 +64,7 @@ def main():
     parser.add_argument('--train_size', type=float, default=.75)
     parser.add_argument('--batch_size', type=int, default=128)
     parser.add_argument('--epochs', type=int, default=30)
-    parser.add_argument('--dense_dim', type=int, default=10)
+    parser.add_argument('--dense_dim', type=int, default=256)
     parser.add_argument('--lr', type=float, default=.0003)
     parser.add_argument('--dropout', type=float, default=.5)
     
@@ -47,8 +72,8 @@ def main():
     print(args)
 
     base_model = load_model(args.model_prefix + '.model')
-    x = base_model.output
-    x = Concatenate(axis=-1)(x)
+
+    x = Lambda(combine_, output_shape=combine_output_shape)(base_model.output)
     x = TimeDistributed(Dense(args.dense_dim, activation='relu'))(x)
     x = Dropout(args.dropout)(x)
     predictions = TimeDistributed(Dense(2, activation='relu'))(x)
