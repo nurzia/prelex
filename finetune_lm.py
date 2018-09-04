@@ -44,17 +44,22 @@ def combine_(x):
 
 def combine_output_shape(input_shape):
     shape = list(input_shape[0])
-    shape[-1] *= 2
-    shape[-2] += 1
+    shape[-1] *= 2 # we double the actual feature dimension
+    shape[-2] += 1 # we add a timestep with respect to the LM
     return tuple(shape)
 
 
 class BatchGenerator(object):
 
-    def __init__(self, X, Y, batch_size):
+    def __init__(self, filenames, batch_size, frames,
+                hop, num_freq, chat_dir, bptt):
+        self.filenames = filenames
+        self.bptt = bptt
         self.batch_size = batch_size
-        self.X = X
-        self.Y = Y
+        self.frames = frames
+        self.hop = hop
+        self.num_freq = num_freq
+        self.chat_dir = chat_dir
         self.num_batches = None
 
     def generate_batches(self, endless=False):
@@ -63,21 +68,63 @@ class BatchGenerator(object):
         batch_cnt = 0
 
         while True:
-            for batch, y in zip(self.X, self.Y):
 
-                l, r = batch[:-1, :], batch[1:, :]
+            for file_idx, audio_file in enumerate(self.filenames):
+                # extract audio
+                wave, sample_rate = preprocess.load_file(audio_file)
+                spectrogram = preprocess.spectrogram(wave, sample_rate,
+                                                      num_frames=self.frames,
+                                                      hop_length=self.hop,
+                                                      num_freq=self.num_freq)
 
-                forward_in_batch.append(l)
-                backward_in_batch.append(r[::-1, :])
+                child_name = audio_file.split('/')[2]
 
-                out_batch.append(y)
+                # extract transcription
+                bn = os.path.basename(audio_file).replace('.wav', '')
+                p = f'{self.chat_dir}/{child_name}/{bn}_S.cha'
+                intervals = preprocess.extract_intervals(p)
+                markers = preprocess.apply_intervals(wave, sample_rate, intervals)
+                ints = preprocess.mark_spectro(spectrogram.shape[0], num_frames=self.frames,
+                                    hop_length=self.hop, markers=markers)
 
-                if len(forward_in_batch) >= self.batch_size:
-                    yield ({'forward_in': np.array(forward_in_batch, dtype=np.float32),
-                            'backward_in': np.array(backward_in_batch, dtype=np.float32)},
-                           {'output_': np.array(out_batch, dtype=np.int32)})
-                    batch_cnt += 1
-                    forward_in_batch, backward_in_batch, out_batch = [], [], []
+                X = np.array(spectrogram, dtype=np.float32)
+                Y = np.array(ints, dtype=np.int32)
+
+                # batchify the data:
+                num_batches = X.shape[0] // self.bptt
+                X = X[:num_batches * self.bptt]
+                X = X.reshape((num_batches, -1, X.shape[1]))
+                Y = Y[:num_batches * self.bptt]
+                Y = Y.reshape((num_batches, -1))
+                
+                batch_sums = Y.sum(axis=1)
+                non_empty = np.where(batch_sums > 0)[0]
+                empty = np.where(batch_sums == 0)[0]
+                empty = np.random.choice(empty, len(non_empty), replace=False)
+                keep = tuple(sorted(list(non_empty) + list(empty)))
+
+                X = X[keep, :, :]
+                Y = Y[keep, :]
+
+                #print('1-ratio: ', Y.sum() / len(Y.ravel()))
+
+                Y_cat = to_categorical(Y, num_classes=2)
+
+                for timesteps, y in zip(X, Y_cat):
+
+                    l, r = timesteps[:-1, :], timesteps[1:, :]
+
+                    forward_in_batch.append(l)
+                    backward_in_batch.append(r[::-1, :])
+
+                    out_batch.append(y)
+
+                    if len(forward_in_batch) >= self.batch_size:
+                        yield ({'forward_in': np.array(forward_in_batch, dtype=np.float32),
+                                'backward_in': np.array(backward_in_batch, dtype=np.float32)},
+                               {'output_': np.array(out_batch, dtype=np.int32)})
+                        batch_cnt += 1
+                        forward_in_batch, backward_in_batch, out_batch = [], [], []
 
             if not endless:
                 break
@@ -101,12 +148,12 @@ def main():
     parser.add_argument('--hop', type=int, default=256)
     parser.add_argument('--num_freq', type=int, default=64)
     parser.add_argument('--max_children', type=int, default=1)
-    parser.add_argument('--max_files', type=int, default=2)
+    parser.add_argument('--max_files', type=int, default=10)
     parser.add_argument('--preprocess', action='store_true', default=False)
 
     # model
     parser.add_argument('--bptt', type=int, default=11) # needs to be one higher than the LM
-    parser.add_argument('--train_size', type=float, default=.75)
+    parser.add_argument('--train_size', type=float, default=.8)
     parser.add_argument('--batch_size', type=int, default=128)
     parser.add_argument('--epochs', type=int, default=5)
     parser.add_argument('--burn_in_epochs', type=int, default=1)
@@ -127,104 +174,31 @@ def main():
     for audio_folder in children:
         for audio_file in glob.glob(f'{audio_folder}/*.wav'):
             audio_files.append(audio_file)
- 
-    if args.preprocess:
-        X, Y = [], []
-        for file_idx, audio_file in enumerate(audio_files):
-            print(audio_file)
-            # extract audio
-            wave, sample_rate = preprocess.load_file(audio_file)
-            spectrogram = preprocess.spectrogram(wave, sample_rate,
-                                                  num_frames=args.frames,
-                                                  hop_length=args.hop,
-                                                  num_freq=args.num_freq)
-            print(spectrogram.shape)
 
-            child_name = audio_file.split('/')[2]
+    if args.max_files:
+        audio_files = audio_files[:args.max_files]
 
-            # extract transcription
-            bn = os.path.basename(audio_file).replace('.wav', '')
-            p = f'{args.chat_dir}/{child_name}/{bn}_S.cha'
-            intervals = preprocess.extract_intervals(p)
-            markers = preprocess.apply_intervals(wave, sample_rate, intervals)
-            ints = preprocess.mark_spectro(spectrogram.shape[0], num_frames=args.frames,
-                                hop_length=args.hop, markers=markers)
-            X.extend(spectrogram)
-            Y.extend(ints)
-            
-            if args.max_files and len(X) >= args.max_files:
-                break
+    train_fns, rest_fns = train_test_split(audio_files, train_size=args.train_size,
+                                           random_state=args.seed)
+    dev_fns, test_fns = train_test_split(rest_fns, train_size=.5,
+                                        random_state=args.seed)
 
-        X = np.array(X, dtype=np.float32)
-        Y = np.array(Y, dtype=np.int32)
-
-        try:
-            shutil.rmtree(args.data_dir)
-        except FileNotFoundError:
-            pass
-        os.mkdir(args.data_dir)
-
-        np.save(f'{args.data_dir}/X.npy', X)
-        np.save(f'{args.data_dir}/Y.npy', Y)
-
-    else:
-        X = np.load(f'{args.data_dir}/X.npy')
-        Y = np.load(f'{args.data_dir}/Y.npy')
-
-
-    # batchify the data:
-    num_batches = X.shape[0] // args.bptt
-    X = X[:num_batches * args.bptt]
-    X = X.reshape((num_batches, -1, X.shape[1]))
-    Y = Y[:num_batches * args.bptt]
-    Y = Y.reshape((num_batches, -1))
-    
-    batch_sums = Y.sum(axis=1)
-    non_empty = np.where(batch_sums > 0)[0]
-    empty = np.where(batch_sums == 0)[0]
-    empty = np.random.choice(empty, len(non_empty), replace=False)
-    keep = tuple(sorted(list(non_empty) + list(empty)))
-
-    X = X[keep, :, :]
-    Y = Y[keep, :]
-
-    print('1-ratio: ', Y.sum() / len(Y.ravel()))
-
-    # split train from rest (dev + test)
-    sums = [int(b.sum() > 0) for b in Y]
-    splits = train_test_split(X, Y, train_size=args.train_size,
-                              stratify=sums,
-                              random_state=args.seed)
-    X_train, X_rest, Y_train, Y_rest = splits
-
-    # dev from test
-    sums = [int(b.sum() > 0) for b in Y_rest]
-    splits = train_test_split(X_rest, Y_rest, train_size=.5,
-                              stratify=sums,
-                              random_state=args.seed)
-    X_dev, X_test, Y_dev, Y_test = splits
-    
-    Y_train_cat = to_categorical(Y_train, num_classes=2)
-    Y_dev_cat = to_categorical(Y_dev, num_classes=2)
-
-    print(X_train.shape)
-    print(X_dev.shape)
-    print(X_test.shape)
-
-    train_generator = BatchGenerator(X_train, Y_train_cat, args.batch_size)
+    train_generator = BatchGenerator(train_fns, batch_size=args.batch_size, frames=args.frames,
+                                     hop=args.hop, num_freq=args.num_freq, chat_dir=args.chat_dir,
+                                     bptt=args.bptt)
     for in_, out_ in train_generator.generate_batches(endless=False):
         pass
 
-    dev_generator = BatchGenerator(X_dev, Y_dev_cat, args.batch_size)
+    dev_generator = BatchGenerator(dev_fns, batch_size=args.batch_size, frames=args.frames,
+                                    hop=args.hop, num_freq=args.num_freq, chat_dir=args.chat_dir,
+                                    bptt=args.bptt)
     for in_, out_ in dev_generator.generate_batches(endless=False):
         pass
 
     base_model = load_model(args.model_prefix + '.model')
 
     x = Lambda(combine_, output_shape=combine_output_shape)(base_model.output)
-    print(x.shape, '++++++++++')
     x = TimeDistributed(Dense(args.dense_dim, activation='relu'))(x)
-    print(x.shape, '-----------')
     x = Dropout(args.dropout)(x)
 
     predictions = TimeDistributed(Dense(2, activation='relu'), name='output_')(x)
