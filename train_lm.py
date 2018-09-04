@@ -7,16 +7,45 @@ import shutil
 import numpy as np
 
 from keras.utils import to_categorical
-from keras.callbacks import ModelCheckpoint, ReduceLROnPlateau
+from keras.callbacks import ModelCheckpoint, ReduceLROnPlateau, Callback
 
 import preprocess
 import utils
 import modelling
 
-# TO DO:
-# - statefulness?
-# - check truncation issue
-# - sample from the model and convert generated spectrogram back to audio
+
+class GenerationCallback(Callback):
+
+    def __init__(self, bptt, max_len, num_freq):
+        super(GenerationCallback, self).__init__()
+        self.bptt = bptt
+        self.max_len = max_len
+        self.num_freq = num_freq
+
+    def on_epoch_end(self, epoch, logs):
+        timeseries = np.zeros((self.bptt + 1, self.num_freq))
+
+        # Question: not sure whether we can actually generate for the backward model?
+        spectrogram_ = []
+        for timestep in range(self.max_len):
+            l, r = timeseries[:-1, :], timeseries[1:, :]
+
+            forward_in_batch = [l]
+            backward_in_batch = [r[::-1, :]]
+
+            input_data = {'forward_in': np.array(forward_in_batch, dtype=np.float32),
+                          'backward_in': np.array(backward_in_batch, dtype=np.float32)}
+
+            forward, backward = self.model.predict(input_data)
+            forward = forward[0, -1, :] # only one item in batch
+            spectrogram_.append(forward)
+
+            timeseries = np.vstack((timeseries[:-1, :], forward))
+
+        spectrogram_ = np.array(spectrogram_)
+        print('generated spectogram shape:', spectrogram_.shape)
+
+        # TO-DO: reconvert the spectrogram to an actual sound wave and save it to file.
 
 
 class AudioGenerator(object):
@@ -45,6 +74,7 @@ class AudioGenerator(object):
 
     def get_batches(self, endless=False):
         batch_cnt = 0
+
         while True:
             for file_idx, audio_file in enumerate(self.audio_files):
                 print('parsing:', audio_file)
@@ -57,18 +87,18 @@ class AudioGenerator(object):
                                                 num_freq=self.num_freq)
                 X = np.array(spectrogram, dtype=np.float32)
                 
-                # divide into batches:
-                num_batches = X.shape[0] // (self.bptt + 1)
-                X = X[:num_batches * (self.bptt + 1)]
-                X = X.reshape((num_batches, -1, X.shape[1]))
+                # divide into time series:
+                num_time_series = X.shape[0] // (self.bptt + 1)
+                X = X[:num_time_series * (self.bptt + 1)]
+                X = X.reshape((num_time_series, -1, X.shape[1]))
 
-                # start yielding batches:
+                # start yielding batches (truncates last series that don't fit):
                 forward_in_batch, forward_out_batch = [], []
                 backward_in_batch, backward_out_batch = [], []
 
-                for batch_idx, batch in enumerate(X):
+                for series_idx, series in enumerate(X):
 
-                    l, r = batch[:-1, :], batch[1:, :]
+                    l, r = series[:-1, :], series[1:, :]
 
                     forward_in_batch.append(l)
                     forward_out_batch.append(r)
@@ -76,7 +106,7 @@ class AudioGenerator(object):
                     backward_in_batch.append(r[::-1, :])
                     backward_out_batch.append(l[::-1, :])
 
-                    if len(forward_in_batch) >= self.batch_size:
+                    if len(forward_in_batch) >= self.batch_size or (series_idx == (X.shape[0] - 1)):
                         yield ({'forward_in': np.array(forward_in_batch, dtype=np.float32),
                                 'backward_in': np.array(backward_in_batch, dtype=np.float32)},
                                {'forward_out': np.array(forward_out_batch, dtype=np.float32),
@@ -107,12 +137,12 @@ def main():
     parser.add_argument('--model_prefix', type=str, default='lm')
 
     # preprocessing:
-    parser.add_argument('--frames', type=int, default=256) # 256
+    parser.add_argument('--frames', type=int, default=256)
     parser.add_argument('--seed', type=int, default=26711)
     parser.add_argument('--hop', type=int, default=256)
     parser.add_argument('--num_freq', type=int, default=64)
     parser.add_argument('--max_children', type=int, default=1)
-    parser.add_argument('--max_files', type=int, default=2)
+    parser.add_argument('--max_files', type=int, default=1)
 
     # model:
     parser.add_argument('--bptt', type=int, default=10)
@@ -122,6 +152,7 @@ def main():
     parser.add_argument('--num_layers', type=int, default=2)
     parser.add_argument('--hidden_dim', type=int, default=10)
     parser.add_argument('--lr', type=float, default=.001)
+    parser.add_argument('--max_gen_len', type=int, default=30)
 
     args = parser.parse_args()
     print(args)
@@ -145,7 +176,7 @@ def main():
     
     # idle loop over the generator to know how many batches we have:
     for batch in generator.get_batches(endless=False):
-        pass
+        passx
 
     # define callbacks for model fitting:
     checkpoint = ModelCheckpoint(args.model_prefix + '.model', monitor='loss',
@@ -153,13 +184,15 @@ def main():
     reduce_lr = ReduceLROnPlateau(monitor='loss', factor=0.3,
                                   patience=1, min_lr=0.000001,
                                   verbose=1, min_delta=0.03)
+    generate = GenerationCallback(bptt=args.bptt, max_len=args.max_gen_len,
+                                  num_freq=args.num_freq)
 
     # fit the model:
     try:
         model.fit_generator(generator=generator.get_batches(endless=True),
                             steps_per_epoch=generator.num_batches,
                             epochs=args.epochs,
-                            callbacks=[checkpoint, reduce_lr])
+                            callbacks=[checkpoint, reduce_lr, generate])
     except KeyboardInterrupt:
         pass
 

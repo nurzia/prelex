@@ -91,15 +91,15 @@ class BatchGenerator(object):
                 Y = np.array(ints, dtype=np.int32)
 
                 # batchify the data:
-                num_batches = X.shape[0] // self.bptt
-                X = X[:num_batches * self.bptt]
-                X = X.reshape((num_batches, -1, X.shape[1]))
-                Y = Y[:num_batches * self.bptt]
-                Y = Y.reshape((num_batches, -1))
+                num_series = X.shape[0] // self.bptt
+                X = X[:num_series * self.bptt]
+                X = X.reshape((num_series, -1, X.shape[1]))
+                Y = Y[:num_series * self.bptt]
+                Y = Y.reshape((num_series, -1))
                 
-                batch_sums = Y.sum(axis=1)
-                non_empty = np.where(batch_sums > 0)[0]
-                empty = np.where(batch_sums == 0)[0]
+                series_sums = Y.sum(axis=1)
+                non_empty = np.where(series_sums > 0)[0]
+                empty = np.where(series_sums == 0)[0]
                 empty = np.random.choice(empty, len(non_empty), replace=False)
                 keep = tuple(sorted(list(non_empty) + list(empty)))
 
@@ -110,16 +110,16 @@ class BatchGenerator(object):
 
                 Y_cat = to_categorical(Y, num_classes=2)
 
-                for timesteps, y in zip(X, Y_cat):
+                for series_idx, (series, y) in enumerate(zip(X, Y_cat)):
 
-                    l, r = timesteps[:-1, :], timesteps[1:, :]
+                    l, r = series[:-1, :], series[1:, :]
 
                     forward_in_batch.append(l)
                     backward_in_batch.append(r[::-1, :])
 
                     out_batch.append(y)
 
-                    if len(forward_in_batch) >= self.batch_size:
+                    if len(forward_in_batch) >= self.batch_size or (series_idx == (X.shape[0] - 1)):
                         yield ({'forward_in': np.array(forward_in_batch, dtype=np.float32),
                                 'backward_in': np.array(backward_in_batch, dtype=np.float32)},
                                {'output_': np.array(out_batch, dtype=np.int32)})
@@ -212,7 +212,7 @@ def main():
     
     fine_model.summary()
 
-    optim = Adam(lr=args.lr)
+    optim = SGD(lr=args.lr)
     fine_model.compile(optimizer=optim,
                   loss={'output_': 'categorical_crossentropy'},
                   metrics=['accuracy'])
@@ -230,7 +230,7 @@ def main():
         fine_model.fit_generator(generator=train_generator.generate_batches(endless=True),
                             steps_per_epoch=train_generator.num_batches,
                             epochs=args.burn_in_epochs,
-                            validation_data=dev_generator.generate_batches(endless=False),
+                            validation_data=dev_generator.generate_batches(endless=True),
                             validation_steps=dev_generator.num_batches,
                             callbacks=[checkpoint, reduce_lr])
     except KeyboardInterrupt:
@@ -257,7 +257,7 @@ def main():
                             steps_per_epoch=train_generator.num_batches,
                             epochs=args.epochs,
                             validation_steps=dev_generator.num_batches,
-                            validation_data=dev_generator.generate_batches(endless=False),
+                            validation_data=dev_generator.generate_batches(endless=True),
                             callbacks=[checkpoint, reduce_lr])
     except KeyboardInterrupt:
         pass

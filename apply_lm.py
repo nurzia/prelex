@@ -51,14 +51,12 @@ def main():
                                          num_freq=args.num_freq)
     X = np.array(spectrogram, dtype=np.float32)
                 
-    # divide into batches:
-    num_batches = X.shape[0] // (args.bptt + 1)
-
-    # TO DO: this is a truncation, so we'll miss the end of the file sometimes...
-    X = X[:num_batches * (args.bptt + 1)]
+    # divide into time series:
+    num_series = X.shape[0] // (args.bptt + 1)
+    X = X[:num_series * (args.bptt + 1)]
     print('shape of the spectrogram:', X.shape)
 
-    X = X.reshape((num_batches, -1, X.shape[1]))
+    X = X.reshape((num_series, -1, X.shape[1]))
     print('shape of the batched spectrogram:', X.shape)
 
     forward_reprs, backward_reprs = [], []
@@ -66,13 +64,13 @@ def main():
 
     filler = np.zeros(args.num_freq)
 
-    for batch_idx, batch in enumerate(X):
-        l, r = batch[:-1, :], batch[1:, :]
+    for series_idx, series in enumerate(X):
+        l, r = series[:-1, :], series[1:, :]
 
         forward_in_batch.append(l)
         backward_in_batch.append(r[::-1, :])
 
-        if len(forward_in_batch) == args.batch_size:
+        if (len(forward_in_batch) == args.batch_size) or (series_idx == (X.shape[0] - 1)):
             in_  = {'forward_in': np.array(forward_in_batch, dtype=np.float32),
                     'backward_in': np.array(backward_in_batch, dtype=np.float32)}
 
