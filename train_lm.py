@@ -161,7 +161,7 @@ def main():
                             epochs=args.epochs,
                             callbacks=[checkpoint, reduce_lr])
     except KeyboardInterrupt:
-        return
+        pass
 
 
 if __name__ == '__main__':
