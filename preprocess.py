@@ -86,7 +86,7 @@ def spectrogram(signal, sr, num_frames, hop_length, num_freq, lowcut=500, highcu
     return librosa.core.power_to_db(np.abs(S)**2).transpose()
 
 def inverse_spectrogram(spectrogram, num_frames, hop_length):
-    wave = librosa.core.istft(spectrogram, n_fft=num_frames, hop_length=hop_length, window='hann', center=False)
+    wave = librosa.core.istft(spectrogram, win_length=num_frames, hop_length=hop_length, window='hann', center=False)
     return wave
 
 

@@ -21,7 +21,6 @@ from keras.utils import to_categorical
 
 
 import preprocess
-import utils
 import modelling
 
 
@@ -77,7 +76,7 @@ class BatchGenerator(object):
                                                       hop_length=self.hop,
                                                       num_freq=self.num_freq)
 
-                child_name = audio_file.split('/')[2]
+                child_name = audio_file.split('/')[-2]
 
                 # extract transcription
                 bn = os.path.basename(audio_file).replace('.wav', '')
@@ -137,9 +136,8 @@ def main():
     parser = argparse.ArgumentParser()
 
     # data paths
-    parser.add_argument('--audio_dir', type=str, default='assets/AUDIO')
-    parser.add_argument('--chat_dir', type=str, default='assets/TRANSCRIPTION')
-    parser.add_argument('--data_dir', type=str, default='assets/preprocessed')
+    parser.add_argument('--audio_dir', type=str, default='/home/nurzia/AUDIO')
+    parser.add_argument('--chat_dir', type=str, default='/home/nurzia/TRANSCRIPTION')
     parser.add_argument('--model_prefix', type=str, default='lm')
 
     # preprocessing

@@ -23,7 +23,7 @@ def main():
     parser = argparse.ArgumentParser()
 
     # data paths
-    parser.add_argument('--audio_infile', type=str, default='assets/AUDIO/BRA/BRA000600_OV_01.wav')
+    parser.add_argument('--audio_infile', type=str, default='/home/nurzia/AUDIO/BRA/BRA000600_OV_01.wav')
     parser.add_argument('--model_prefix', type=str, default='lm')
 
     # preprocessing

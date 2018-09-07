@@ -10,7 +10,6 @@ from keras.utils import to_categorical
 from keras.callbacks import ModelCheckpoint, ReduceLROnPlateau, Callback
 
 import preprocess
-import utils
 import modelling
 
 
@@ -48,8 +47,8 @@ class GenerationCallback(Callback):
         print('generated spectogram shape:', spectrogram_.shape)
 
         # STUB
-        wave = preprocess.inverse_spectogram(spectrogram_, self.window, self.hop)
-        print(wave.shape)
+        #wave = preprocess.inverse_spectrogram(spectrogram_, self.window, self.hop)
+        #print(wave.shape)
 
         # TO-DO: reconvert the spectrogram to an actual sound wave and save it to file.
 
@@ -69,13 +68,13 @@ class AudioGenerator(object):
         self.batch_size = batch_size
         self.num_batches = None
 
-        children = sorted(glob.glob(f'{self.audio_dir}/*'))
+        children = sorted(glob.glob(self.audio_dir + '/*'))
         if self.max_children:
             children = children[:self.max_children]
 
         self.audio_files = []
         for audio_folder in children:
-            for audio_file in glob.glob(f'{audio_folder}/*.wav'):
+            for audio_file in glob.glob(audio_folder + '/*.wav'):
                 self.audio_files.append(audio_file)
 
     def get_batches(self, endless=False):
@@ -137,9 +136,8 @@ def main():
     parser = argparse.ArgumentParser()
 
     # data:
-    parser.add_argument('--audio_dir', type=str, default='assets/AUDIO')
-    parser.add_argument('--chat_dir', type=str, default='assets/TRANSCRIPTION')
-    parser.add_argument('--data_dir', type=str, default='assets/preprocessed')
+    parser.add_argument('--audio_dir', type=str, default='/home/nurzia/AUDIO')
+    parser.add_argument('--chat_dir', type=str, default='/home/nurzia/TRANSCRIPTION')
     parser.add_argument('--model_prefix', type=str, default='lm')
 
     # preprocessing:
@@ -180,9 +178,10 @@ def main():
                                bptt=args.bptt,
                                batch_size=args.batch_size)
     
+    print('-> idle loop over data...')
     # idle loop over the generator to know how many batches we have:
     for batch in generator.get_batches(endless=False):
-        passx
+        pass
 
     # define callbacks for model fitting:
     checkpoint = ModelCheckpoint(args.model_prefix + '.model', monitor='loss',
@@ -191,7 +190,7 @@ def main():
                                   patience=1, min_lr=0.000001,
                                   verbose=1, min_delta=0.03)
     generate = GenerationCallback(bptt=args.bptt, max_len=args.max_gen_len,
-                                  num_freq=args.num_freq, window=args.window,
+                                  num_freq=args.num_freq, window=args.frames,
                                   hop=args.hop)
 
     # fit the model:
