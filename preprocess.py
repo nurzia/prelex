@@ -85,6 +85,10 @@ def spectrogram(signal, sr, num_frames, hop_length, num_freq, lowcut=500, highcu
     S = librosa.feature.melspectrogram(y=None, sr=sr, S=spectrum, n_fft=num_frames, hop_length=hop_length, n_mels=num_freq)
     return librosa.core.power_to_db(np.abs(S)**2).transpose()
 
+def inverse_spectrogram(spectrogram, num_frames, hop_length):
+    wave = librosa.core.istft(spectrogram, n_fft=num_frames, hop_length=hop_length, window='hann', center=False)
+    return wave
+
 
 def pre_emphasis(signal):
     pre_emphasis = 0.97

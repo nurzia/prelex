@@ -16,11 +16,13 @@ import modelling
 
 class GenerationCallback(Callback):
 
-    def __init__(self, bptt, max_len, num_freq):
+    def __init__(self, bptt, max_len, num_freq, window, hop):
         super(GenerationCallback, self).__init__()
         self.bptt = bptt
         self.max_len = max_len
         self.num_freq = num_freq
+        self.window = window
+        self.hop = hop
 
     def on_epoch_end(self, epoch, logs):
         timeseries = np.zeros((self.bptt + 1, self.num_freq))
@@ -44,6 +46,10 @@ class GenerationCallback(Callback):
 
         spectrogram_ = np.array(spectrogram_)
         print('generated spectogram shape:', spectrogram_.shape)
+
+        # STUB
+        wave = preprocess.inverse_spectogram(spectrogram_, self.window, self.hop)
+        print(wave.shape)
 
         # TO-DO: reconvert the spectrogram to an actual sound wave and save it to file.
 
@@ -185,7 +191,8 @@ def main():
                                   patience=1, min_lr=0.000001,
                                   verbose=1, min_delta=0.03)
     generate = GenerationCallback(bptt=args.bptt, max_len=args.max_gen_len,
-                                  num_freq=args.num_freq)
+                                  num_freq=args.num_freq, window=args.window,
+                                  hop=args.hop)
 
     # fit the model:
     try:
