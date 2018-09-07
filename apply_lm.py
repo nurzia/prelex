@@ -23,17 +23,17 @@ def main():
     parser = argparse.ArgumentParser()
 
     # data paths
-    parser.add_argument('--audio_infile', type=str, default='assets/AUDIO/BRA/BRA000600_OV_01.wav')
+    parser.add_argument('--audio_infile', type=str, default='/home/nurzia/AUDIO/BRA/BRA000600_OV_01.wav')
     parser.add_argument('--model_prefix', type=str, default='lm')
 
     # preprocessing
-    parser.add_argument('--frames', type=int, default=256)
+    parser.add_argument('--frames', type=int, default=25)
+    parser.add_argument('--hop', type=int, default=25)
     parser.add_argument('--seed', type=int, default=26711)
-    parser.add_argument('--hop', type=int, default=256)
-    parser.add_argument('--num_freq', type=int, default=64)
+    parser.add_argument('--num_freq', type=int, default=128)
 
     # model
-    parser.add_argument('--bptt', type=int, default=10)
+    parser.add_argument('--bptt', type=int, default=50)
     parser.add_argument('--batch_size', type=int, default=128)
 
     args = parser.parse_args()

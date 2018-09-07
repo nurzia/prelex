@@ -21,7 +21,6 @@ from keras.utils import to_categorical
 
 
 import preprocess
-import utils
 import modelling
 
 
@@ -77,7 +76,7 @@ class BatchGenerator(object):
                                                       hop_length=self.hop,
                                                       num_freq=self.num_freq)
 
-                child_name = audio_file.split('/')[2]
+                child_name = audio_file.split('/')[-2]
 
                 # extract transcription
                 bn = os.path.basename(audio_file).replace('.wav', '')
@@ -137,32 +136,34 @@ def main():
     parser = argparse.ArgumentParser()
 
     # data paths
-    parser.add_argument('--audio_dir', type=str, default='assets/AUDIO')
-    parser.add_argument('--chat_dir', type=str, default='assets/TRANSCRIPTION')
-    parser.add_argument('--data_dir', type=str, default='assets/preprocessed')
+    parser.add_argument('--audio_dir', type=str, default='/home/nurzia/AUDIO')
+    parser.add_argument('--chat_dir', type=str, default='/home/nurzia/TRANSCRIPTION')
     parser.add_argument('--model_prefix', type=str, default='lm')
 
     # preprocessing
-    parser.add_argument('--frames', type=int, default=256) # 256
+    parser.add_argument('--frames', type=int, default=50)
+    parser.add_argument('--hop', type=int, default=50)
     parser.add_argument('--seed', type=int, default=26711)
-    parser.add_argument('--hop', type=int, default=256)
-    parser.add_argument('--num_freq', type=int, default=64)
+    parser.add_argument('--num_freq', type=int, default=128)
     parser.add_argument('--max_children', type=int, default=1)
     parser.add_argument('--max_files', type=int, default=10)
     parser.add_argument('--preprocess', action='store_true', default=False)
 
     # model
-    parser.add_argument('--bptt', type=int, default=11) # needs to be one higher than the LM
+    parser.add_argument('--bptt', type=int, default=50) # needs to be one higher than the LM
     parser.add_argument('--train_size', type=float, default=.8)
     parser.add_argument('--batch_size', type=int, default=128)
     parser.add_argument('--epochs', type=int, default=5)
     parser.add_argument('--burn_in_epochs', type=int, default=1)
     parser.add_argument('--dense_dim', type=int, default=256)
-    parser.add_argument('--lr', type=float, default=.0000001) # the learning rate has to be tiny to avoid underflow (NaN)
+    parser.add_argument('--lr', type=float, default=.0001) # the learning rate has to be tiny to avoid underflow (NaN)
     parser.add_argument('--dropout', type=float, default=.0)
     
     args = parser.parse_args()
     print(args)
+
+    # add 1!
+    args.bptt += 1
 
     random.seed(args.seed)
 
@@ -212,7 +213,7 @@ def main():
     
     fine_model.summary()
 
-    optim = SGD(lr=args.lr)
+    optim = Adam(lr=args.lr)
     fine_model.compile(optimizer=optim,
                   loss={'output_': 'categorical_crossentropy'},
                   metrics=['accuracy'])
@@ -237,10 +238,10 @@ def main():
         pass
 
     # unfreeze after burn-in training:
-    for layer in base_model.layers:
+    for layer in fine_model.layers:
         layer.trainable = True
 
-    optim = SGD(lr=args.lr)
+    optim = Adam(lr=args.lr)
     fine_model.compile(optimizer=optim,
                   loss={'output_': 'categorical_crossentropy'},
                   metrics=['accuracy'])
