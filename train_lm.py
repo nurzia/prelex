@@ -5,6 +5,7 @@ import os
 import shutil
 
 import numpy as np
+import librosa
 
 from keras.utils import to_categorical
 from keras.callbacks import ModelCheckpoint, ReduceLROnPlateau, Callback
@@ -15,13 +16,14 @@ import modelling
 
 class GenerationCallback(Callback):
 
-    def __init__(self, bptt, max_len, num_freq, window, hop):
+    def __init__(self, bptt, max_len, num_freq, frames, hop, rate=44100):
         super(GenerationCallback, self).__init__()
         self.bptt = bptt
         self.max_len = max_len
         self.num_freq = num_freq
-        self.window = window
+        self.frames = frames
         self.hop = hop
+        self.rate = rate
 
     def on_epoch_end(self, epoch, logs):
         timeseries = np.zeros((self.bptt + 1, self.num_freq))
@@ -47,10 +49,10 @@ class GenerationCallback(Callback):
         print('generated spectogram shape:', spectrogram_.shape)
 
         # STUB
-        #wave = preprocess.inverse_spectrogram(spectrogram_, self.window, self.hop)
-        #print(wave.shape)
-
-        # TO-DO: reconvert the spectrogram to an actual sound wave and save it to file.
+        wave = preprocess.inverse_spectrogram(spectrogram_,
+                                              num_frames=self.frames,
+                                              hop_length=self.hop)
+        librosa.output.write_wav(f'epoch{epoch}.wav', wave, self.rate, norm=True)
 
 
 class AudioGenerator(object):
@@ -142,21 +144,20 @@ def main():
 
     # preprocessing:
     parser.add_argument('--frames', type=int, default=256)
-    parser.add_argument('--seed', type=int, default=26711)
     parser.add_argument('--hop', type=int, default=256)
+    parser.add_argument('--seed', type=int, default=26711)
     parser.add_argument('--num_freq', type=int, default=64)
     parser.add_argument('--max_children', type=int, default=1)
     parser.add_argument('--max_files', type=int, default=1)
+    parser.add_argument('--max_gen_len', type=int, default=300)
 
     # model:
     parser.add_argument('--bptt', type=int, default=10)
-    parser.add_argument('--train_size', type=float, default=.75)
     parser.add_argument('--batch_size', type=int, default=128)
     parser.add_argument('--epochs', type=int, default=30)
     parser.add_argument('--num_layers', type=int, default=2)
     parser.add_argument('--hidden_dim', type=int, default=10)
     parser.add_argument('--lr', type=float, default=.001)
-    parser.add_argument('--max_gen_len', type=int, default=30)
 
     args = parser.parse_args()
     print(args)
@@ -190,7 +191,7 @@ def main():
                                   patience=1, min_lr=0.000001,
                                   verbose=1, min_delta=0.03)
     generate = GenerationCallback(bptt=args.bptt, max_len=args.max_gen_len,
-                                  num_freq=args.num_freq, window=args.frames,
+                                  num_freq=args.num_freq, frames=args.frames,
                                   hop=args.hop)
 
     # fit the model:
