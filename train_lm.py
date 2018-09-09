@@ -12,21 +12,24 @@ from keras.callbacks import ModelCheckpoint, ReduceLROnPlateau, Callback
 
 import preprocess
 import modelling
+import audio_utilities
 
 # convert to this preprocessing?
-# https://timsainb.github.io/spectrograms-mfccs-and-inversion-in-python.html
+# https://github.com/bkvogel/griffin_lim/blob/master/run_demo.py
 
 
 class GenerationCallback(Callback):
 
-    def __init__(self, bptt, max_len, num_freq, frames, hop, rate=44100):
+    def __init__(self, bptt, max_len, num_freq, fft_size,
+                 filterbank, hop, sample_rate=44100):
         super(GenerationCallback, self).__init__()
         self.bptt = bptt
         self.max_len = max_len
         self.num_freq = num_freq
-        self.frames = frames
+        self.fft_size = fft_size
+        self.filterbank = filterbank
         self.hop = hop
-        self.rate = rate
+        self.sample_rate = sample_rate
 
     def on_epoch_end(self, epoch, logs):
         timeseries = np.zeros((self.bptt + 1, self.num_freq))
@@ -48,29 +51,39 @@ class GenerationCallback(Callback):
 
             timeseries = np.vstack((timeseries[:-1, :], forward))
 
-        spectrogram_ = np.array(spectrogram_)
-        print('generated spectogram shape:', spectrogram_.shape)
+        mel_spectrogram_ = np.array(spectrogram_)
+        print('generated spectogram shape:', mel_spectrogram_.shape)
 
-        # STUB
-        wave = preprocess.inverse_spectrogram(spectrogram_,
-                                              num_frames=self.frames,
-                                              hop_length=self.hop)
-        librosa.output.write_wav(f'epoch{epoch}.wav', wave, self.rate, norm=True)
+        # is this correct? Swapped arguments...
+        inverted_spectrogram_ = np.dot(mel_spectrogram_, self.filterbank)
+
+        wave_ = preprocess.invert_spectrogram(inverted_spectrogram_,
+                                             fft_size=self.fft_size,
+                                             hop=self.hop)
+        print('generated wave shape:', wave_.shape)
+        #print('generated wave shape in seconds:', wave_.shape / self.sample_rate)
+        audio_utilities.save_audio_to_file(wave_,
+                                           self.sample_rate,
+                                           outfile=f'epoch{epoch}.wav')
 
 
 class AudioGenerator(object):
 
-    def __init__(self, audio_dir, frames, hop,
-                 num_freq, bptt, batch_size,
+    def __init__(self, audio_dir, fft_size, hop, num_freq, bptt, batch_size,
+                 filterbank, lowcut=70, highcut=8000, sample_rate=44100,
                  max_children=None, max_files=None):
         self.audio_dir = audio_dir
-        self.frames = frames
+        self.fft_size = fft_size
         self.hop = hop
+        self.lowcut = lowcut
+        self.highcut = highcut
+        self.sample_rate = sample_rate
         self.num_freq = num_freq
         self.max_children = max_children
         self.max_files = max_files
         self.bptt = bptt
         self.batch_size = batch_size
+        self.filterbank = filterbank
         self.num_batches = None
 
         children = sorted(glob.glob(self.audio_dir + '/*'))
@@ -82,20 +95,26 @@ class AudioGenerator(object):
             for audio_file in glob.glob(audio_folder + '/*.wav'):
                 self.audio_files.append(audio_file)
 
-    def get_batches(self, endless=False):
+
+    def spectrogram(self, audio_file):
+        signal = audio_utilities.get_signal(audio_file, expected_fs=self.sample_rate)
+        stft_full = audio_utilities.stft_for_reconstruction(signal, self.fft_size, self.hop)
+        stft_mag = abs(stft_full) ** 2.0
+        # remove scale because we don't have it afterwards either...
+        #scale = 1.0 / np.amax(stft_mag)
+        #stft_mag *= scale
+        mel_spectrogram = np.dot(self.filterbank, stft_mag.T)
+        return mel_spectrogram.T
+
+    def get_batches(self, endless=False, sample_rate=44100):
         batch_cnt = 0
 
         while True:
             for file_idx, audio_file in enumerate(self.audio_files):
-                #print('\nparsing:', audio_file)
-
-                # get spectrogram:
-                wave, sample_rate = preprocess.load_file(audio_file)
-                spectrogram = preprocess.spectrogram(wave, sample_rate,
-                                                num_frames=self.frames,
-                                                hop_length=self.hop,
-                                                num_freq=self.num_freq)
-                X = np.array(spectrogram, dtype=np.float32)
+                print(audio_file)
+                
+                mel_spectrogram = self.spectrogram(audio_file)
+                X = np.array(mel_spectrogram, dtype=np.float32)
                 
                 # divide into time series:
                 num_time_series = X.shape[0] // (self.bptt + 1)
@@ -141,30 +160,36 @@ def main():
     parser = argparse.ArgumentParser()
 
     # data:
-    parser.add_argument('--audio_dir', type=str, default='/home/nurzia/AUDIO')
-    parser.add_argument('--chat_dir', type=str, default='/home/nurzia/TRANSCRIPTION')
+    parser.add_argument('--audio_dir', type=str, default='assets/AUDIO')#'/home/nurzia/AUDIO')
     parser.add_argument('--model_prefix', type=str, default='lm')
 
     # preprocessing:
-    parser.add_argument('--frames', type=int, default=25)
-    parser.add_argument('--hop', type=int, default=25)
+    parser.add_argument('--fft_size', type=int, default=256)
+    parser.add_argument('--hop', type=int, default=256)
     parser.add_argument('--seed', type=int, default=26711)
-    parser.add_argument('--num_freq', type=int, default=128)
+    parser.add_argument('--num_freq', type=int, default=65) # why is this half of `frames`?
     parser.add_argument('--max_children', type=int, default=1)
-    parser.add_argument('--max_files', type=int, default=None)
+    parser.add_argument('--max_files', type=int, default=1)
     parser.add_argument('--max_gen_len', type=int, default=300)
+    parser.add_argument('--lowcut', type=int, default=70)
+    parser.add_argument('--highcut', type=int, default=8000)
 
     # model:
     parser.add_argument('--bptt', type=int, default=50)
     parser.add_argument('--batch_size', type=int, default=256)
     parser.add_argument('--epochs', type=int, default=30)
     parser.add_argument('--num_layers', type=int, default=1)
-    parser.add_argument('--hidden_dim', type=int, default=512)
-    parser.add_argument('--lr', type=float, default=.001)
+    parser.add_argument('--hidden_dim', type=int, default=10)
+    parser.add_argument('--lr', type=float, default=.0001)
 
     args = parser.parse_args()
     print(args)
     random.seed(args.seed)
+
+    # create mel filterbank:
+    linear_bin_count = 1 + args.fft_size // 2
+    filterbank = audio_utilities.make_mel_filterbank(args.lowcut, args.highcut, args.num_freq,
+                                                     linear_bin_count , 44100)
 
     # build the bidirectional language model:
     model = modelling.build_lm(bptt=args.bptt, input_dim=args.num_freq,
@@ -174,10 +199,11 @@ def main():
 
     # create a "lazy" batch generator:
     generator = AudioGenerator(audio_dir=args.audio_dir,
-                               frames=args.frames,
+                               fft_size=args.fft_size,
                                hop=args.hop,
                                num_freq=args.num_freq,
                                max_children=args.max_children,
+                               filterbank=filterbank,
                                max_files=args.max_files,
                                bptt=args.bptt,
                                batch_size=args.batch_size)
@@ -194,8 +220,8 @@ def main():
                                   patience=1, min_lr=0.000001,
                                   verbose=1, min_delta=0.03)
     generate = GenerationCallback(bptt=args.bptt, max_len=args.max_gen_len,
-                                  num_freq=args.num_freq, frames=args.frames,
-                                  hop=args.hop)
+                                  num_freq=args.num_freq, fft_size=args.fft_size,
+                                  hop=args.hop, filterbank=filterbank)
 
     # fit the model:
     try:

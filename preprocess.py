@@ -1,5 +1,7 @@
 import numpy as np
 import librosa
+import audio_utilities
+
 
 
 def extract_intervals(fn, allowed={'I0', 'I1', 'I2', 'U0', 'U1', 'U2'}):
@@ -78,7 +80,7 @@ def load_file(filename, duration=None):
 
     return mono_signal, sr
 
-
+"""
 def spectrogram(signal, sr, num_frames, hop_length, num_freq, lowcut=500, highcut=15000):
     signal = pre_emphasis(signal)
     spectrum = librosa.core.stft(signal, n_fft=num_frames, hop_length=hop_length, win_length=None, window='hann', center=False)
@@ -88,8 +90,15 @@ def spectrogram(signal, sr, num_frames, hop_length, num_freq, lowcut=500, highcu
 def inverse_spectrogram(spectrogram, num_frames, hop_length):
     wave = librosa.core.istft(spectrogram, win_length=num_frames, hop_length=hop_length, window='hann', center=False)
     return wave
+"""
 
-
-def pre_emphasis(signal):
-    pre_emphasis = 0.97
-    return np.append(signal[0], signal[1:] - pre_emphasis * signal[:-1])
+def invert_spectrogram(spectrogram, fft_size, hop):
+    x_reconstruct = audio_utilities.reconstruct_signal_griffin_lim(spectrogram,
+                                                                   fft_size,
+                                                                   hopsamp=hop,
+                                                                   iterations=500)
+    max_sample = np.max(abs(x_reconstruct))
+    if max_sample > 1.0:
+        x_reconstruct = x_reconstruct / max_sample
+    return x_reconstruct
+    
