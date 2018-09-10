@@ -289,7 +289,8 @@ def reconstruct_signal_griffin_lim(magnitude_spectrogram, fft_size, hopsamp, ite
         prev_x = x_reconstruct
         x_reconstruct = istft_for_reconstruction(proposal_spectrogram, fft_size, hopsamp)
         diff = np.sqrt(sum((x_reconstruct - prev_x)**2)/x_reconstruct.size)
-        print('Reconstruction iteration: {}/{} RMSE: {} '.format(iterations - n, iterations, diff))
+        if n % 100 == 0:
+            print('Reconstruction iteration: {}/{} RMSE: {} '.format(iterations - n, iterations, diff))
     return x_reconstruct
 
 

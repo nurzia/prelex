@@ -2,8 +2,6 @@ import numpy as np
 import librosa
 import audio_utilities
 
-
-
 def extract_intervals(fn, allowed={'I0', 'I1', 'I2', 'U0', 'U1', 'U2'}):
     """
     Extract relevant time intervals from a transcription file.
@@ -85,8 +83,6 @@ def invert_spectrogram(spectrogram, fft_size, hop):
     """
     out of log > de-apply mel filters > convert spectrogram > normalize
     """
-    spectrogram = np.exp(spectrogram)
-
     x_reconstruct = audio_utilities.reconstruct_signal_griffin_lim(spectrogram,
                                                                    fft_size,
                                                                    hopsamp=hop,
