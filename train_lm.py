@@ -14,8 +14,8 @@ import preprocess
 import modelling
 import audio_utilities
 
-# convert to this preprocessing?
-# https://github.com/bkvogel/griffin_lim/blob/master/run_demo.py
+# for pre-emphasis etc: LOG OF MEL
+# https://github.com/Azure/DataScienceVM/blob/master/Tutorials/DeepLearningForAudio/Deep%20Learning%20for%20Audio%20Part%201%20-%20Audio%20Processing.ipynb
 
 
 class GenerationCallback(Callback):
@@ -54,14 +54,12 @@ class GenerationCallback(Callback):
         mel_spectrogram_ = np.array(spectrogram_)
         print('generated spectogram shape:', mel_spectrogram_.shape)
 
-        # is this correct? Swapped arguments...
         inverted_spectrogram_ = np.dot(mel_spectrogram_, self.filterbank)
 
         wave_ = preprocess.invert_spectrogram(inverted_spectrogram_,
                                              fft_size=self.fft_size,
                                              hop=self.hop)
         print('generated wave shape:', wave_.shape)
-        #print('generated wave shape in seconds:', wave_.shape / self.sample_rate)
         audio_utilities.save_audio_to_file(wave_,
                                            self.sample_rate,
                                            outfile=f'epoch{epoch}.wav')
@@ -95,25 +93,46 @@ class AudioGenerator(object):
             for audio_file in glob.glob(audio_folder + '/*.wav'):
                 self.audio_files.append(audio_file)
 
+    def fit(self):
+        mean, std = [], []
 
-    def spectrogram(self, audio_file):
+        for batch in self.get_batches(endless=False, normalize=False):
+            unrolled = batch[0]['forward_in'].reshape((-1, self.num_freq))
+
+            mean.append(unrolled.mean(axis=0))
+            mean.append(unrolled.std(axis=0))
+
+        self.mean = np.array(mean, dtype='float32').mean(axis=0)
+        self.std = np.array(mean, dtype='float32').std(axis=0)
+
+
+    def spectrogram(self, audio_file, normalize=True, eps=1e-8):
+        """
+        magnitute spectrogram > mel filters > log compression
+        """
         signal = audio_utilities.get_signal(audio_file, expected_fs=self.sample_rate)
         stft_full = audio_utilities.stft_for_reconstruction(signal, self.fft_size, self.hop)
         stft_mag = abs(stft_full) ** 2.0
-        # remove scale because we don't have it afterwards either...
-        #scale = 1.0 / np.amax(stft_mag)
-        #stft_mag *= scale
-        mel_spectrogram = np.dot(self.filterbank, stft_mag.T)
-        return mel_spectrogram.T
+        mel_spectrogram = np.dot(self.filterbank, stft_mag.T).T
 
-    def get_batches(self, endless=False, sample_rate=44100):
+        mel_spectrogram = np.log(mel_spectrogram + eps)
+
+        if normalize:
+            mel_spectrogram -= self.mean
+            mel_spectrogram /= (self.std + eps)
+
+        return mel_spectrogram
+
+
+
+    def get_batches(self, normalize=True, endless=False, sample_rate=44100):
         batch_cnt = 0
 
         while True:
             for file_idx, audio_file in enumerate(self.audio_files):
                 print(audio_file)
                 
-                mel_spectrogram = self.spectrogram(audio_file)
+                mel_spectrogram = self.spectrogram(audio_file, normalize)
                 X = np.array(mel_spectrogram, dtype=np.float32)
                 
                 # divide into time series:
@@ -167,7 +186,7 @@ def main():
     parser.add_argument('--fft_size', type=int, default=256)
     parser.add_argument('--hop', type=int, default=256)
     parser.add_argument('--seed', type=int, default=26711)
-    parser.add_argument('--num_freq', type=int, default=65) # why is this half of `frames`?
+    parser.add_argument('--num_freq', type=int, default=150) # https://blogs.technet.microsoft.com/machinelearning/2018/01/30/hearing-ai-getting-started-with-deep-learning-for-audio-on-azure/
     parser.add_argument('--max_children', type=int, default=1)
     parser.add_argument('--max_files', type=int, default=1)
     parser.add_argument('--max_gen_len', type=int, default=300)
@@ -207,11 +226,7 @@ def main():
                                max_files=args.max_files,
                                bptt=args.bptt,
                                batch_size=args.batch_size)
-    
-    print('-> idle loop over data...')
-    # idle loop over the generator to know how many batches we have:
-    for batch in generator.get_batches(endless=False):
-        pass
+    generator.fit()
 
     # define callbacks for model fitting:
     checkpoint = ModelCheckpoint(args.model_prefix + '.model', monitor='loss',

@@ -1,5 +1,4 @@
-
-
+# https://github.com/bkvogel/griffin_lim/blob/master/run_demo.py
 
 import math
 import sys
@@ -305,7 +304,7 @@ def save_audio_to_file(x, sample_rate, outfile='out.wav'):
     """
     x_max = np.max(abs(x))
     assert x_max <= 1.0, 'Input audio value is out of range. Should be in the range [-1.0, 1.0].'
-    x = x*32767.0
+    x = x * 32767.0
     data = array.array('h')
     for i in range(len(x)):
         cur_samp = int(round(x[i]))
