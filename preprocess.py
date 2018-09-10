@@ -82,7 +82,9 @@ def load_file(filename, duration=None):
 
 
 def invert_spectrogram(spectrogram, fft_size, hop):
-    # take out of log domain:
+    """
+    out of log > de-apply mel filters > convert spectrogram > normalize
+    """
     spectrogram = np.exp(spectrogram)
 
     x_reconstruct = audio_utilities.reconstruct_signal_griffin_lim(spectrogram,
