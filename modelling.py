@@ -13,7 +13,7 @@ def repackage_hidden(h):
 
 class LanguageModel(nn.Module):
     def __init__(self, input_dim, hidden_dim,
-                 bptt, num_layers=1):
+                 num_layers=1):
         super(LanguageModel, self).__init__()
         self.input_dim = input_dim
         self.hidden_dim = hidden_dim

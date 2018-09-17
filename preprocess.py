@@ -1,6 +1,6 @@
 import numpy as np
 import librosa
-import audio_utilities
+from tqdm import tqdm
 
 def extract_intervals(fn, allowed={'I0', 'I1', 'I2', 'U0', 'U1', 'U2'}):
     """
@@ -69,16 +69,6 @@ def mark_spectro(spectro_length, num_frames,
     return overlaps
 
 
-def load_file(filename, duration=None):
-    y, sr = librosa.load(path=filename, sr=None, mono=False)
-    mono_signal = librosa.to_mono(y)
-
-    if duration is not None and isinstance(duration, int) == True:
-        mono_signal = mono_signal[0:sr*duration]
-
-    return mono_signal, sr
-
-
 def invert_spectrogram(spectrogram, fft_size, hop):
     """
     out of log > de-apply mel filters > convert spectrogram > normalize
@@ -86,9 +76,42 @@ def invert_spectrogram(spectrogram, fft_size, hop):
     x_reconstruct = audio_utilities.reconstruct_signal_griffin_lim(spectrogram,
                                                                    fft_size,
                                                                    hopsamp=hop,
-                                                                   iterations=500)
+                                                                   iterations=1000)
     max_sample = np.max(abs(x_reconstruct))
     if max_sample > 1.0:
         x_reconstruct = x_reconstruct / max_sample
     return x_reconstruct
-    
+
+
+def read_audio(audio_path, target_fs=None, duration=60):
+    (audio, fs) = librosa.load(audio_path, sr=None, duration=duration)
+    # if this is not a mono sounds file
+    if audio.ndim > 1:
+        audio = np.mean(audio, axis=1)
+    if target_fs is not None and fs != target_fs:
+        audio = librosa.resample(audio, orig_sr=fs, target_sr=target_fs)
+        fs = target_fs
+    return audio, fs
+
+def griffinlim(spectrogram, n_iter=50, window='hann', n_fft=2048, win_length=2048, hop_length=-1, verbose=False):
+    # https://github.com/barronalex/Tacotron/blob/master/audio.py
+    if hop_length == -1:
+        hop_length = n_fft // 4
+
+    angles = np.exp(2j * np.pi * np.random.rand(*spectrogram.shape))
+
+    t = tqdm(range(n_iter), ncols=100, mininterval=2.0, disable=not verbose)
+    for i in t:
+        full = np.abs(spectrogram).astype(np.complex) * angles
+        inverse = librosa.istft(full, hop_length = hop_length, win_length = win_length, window = window)
+        rebuilt = librosa.stft(inverse, n_fft = n_fft, hop_length = hop_length, win_length = win_length, window = window)
+        angles = np.exp(1j * np.angle(rebuilt))
+
+        if verbose:
+            diff = np.abs(spectrogram) - np.abs(rebuilt)
+            t.set_postfix(loss=np.linalg.norm(diff, 'fro'))
+
+    full = np.abs(spectrogram).astype(np.complex) * angles
+    inverse = librosa.istft(full, hop_length = hop_length, win_length = win_length, window = window)
+
+    return inverse
