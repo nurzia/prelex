@@ -19,8 +19,9 @@ from sklearn.externals import joblib
 class AudioGenerator(object):
 
     def __init__(self, audio_dir, fft_size, hop, num_mel, bptt, batch_size,
-                 device, lowcut=70, highcut=8000, sample_rate=44100,
-                 max_children=None, max_files=None, eps=1e-8):
+                 device, mean_=None, var_=None, lowcut=70, highcut=8000,
+                 sample_rate=44100, max_children=None, max_files=None, eps=1e-8,
+                 **kwargs):
         self.audio_dir = audio_dir
         self.fft_size = fft_size
         self.hop = hop
@@ -34,7 +35,12 @@ class AudioGenerator(object):
         self.batch_size = batch_size
         self.eps = eps
         self.device = device
+
         self.num_batches = None
+
+        if mean_ is not None and var_ is not None:
+            self.mean_ = torch.FloatTensor(mean_).to(self.device)
+            self.var_ = torch.FloatTensor(var_).to(self.device)
 
         children = sorted(glob.glob(self.audio_dir + '/*'))
         if self.max_children:
@@ -58,25 +64,30 @@ class AudioGenerator(object):
                        'highcut': self.highcut,
                        'sample_rate': self.sample_rate,
                        'num_mel': self.num_mel,
-                       'bptt': self.bptt},
+                       'bptt': self.bptt}, f,
                        indent=4)
-            joblib.dump(self.scaler, model_prefix + '_scaler.pkl')
+            np.save(model_prefix + '_mean.npy', self.mean_.cpu().numpy())
+            np.save(model_prefix + '_var.npy', self.var_.cpu().numpy())
 
     @classmethod
-    def load(self, model_prefix, **kwargs):
+    def load(self, model_prefix, args):
+        args = vars(args)
+
         with open(model_prefix + '_params.json', 'r') as f:
             params = json.load(f)
-            for k, v in kwargs:
-                params[k] = v
-            ag = AudioGenerator(**params)
-            ag.scaler = joblib.load(model_prefix + '_scaler.pkl')
-            return ag
+            for k, v in params.items():
+                args[k] = v
+        
+        args['mean_'] = np.load(model_prefix + '_mean.npy')
+        args['var_'] = np.load(model_prefix + '_var.npy')
+
+        return AudioGenerator(**args)
 
     def fit(self, normalize=False):
         if normalize:
 
             scaler = StandardScaler() # only used during fitting because of handy partial_fit method
-            
+
             for batch, _ in self.get_batches(normalize=False):
                 batch = batch.cpu().numpy()
                 flat_batch = batch.reshape((-1, self.num_mel))
@@ -95,7 +106,6 @@ class AudioGenerator(object):
         model.eval()
 
         with torch.no_grad():
-            print('-> generating...')
 
             hidden = model.init_hidden(1)
             hidden = tuple([t.to(self.device) for t in hidden])
@@ -107,7 +117,7 @@ class AudioGenerator(object):
                 spectrogram_.append(inp.squeeze().cpu().numpy())
             
         mel_spectrogram_ = np.array(spectrogram_)
-        print('generated spectogram shape:', mel_spectrogram_.shape)
+        #print('generated spectogram shape:', mel_spectrogram_.shape)
 
         # 1. unnormalize:
         if normalize:
@@ -150,7 +160,6 @@ class AudioGenerator(object):
         batch_cnt = 0
 
         for file_idx, audio_path in enumerate(self.audio_files):
-            #print(audio_path)
 
             sound_clip, fn_fs = preprocess.read_audio(audio_path, target_fs=sample_rate, duration=None)
             
