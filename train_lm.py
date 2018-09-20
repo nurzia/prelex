@@ -5,6 +5,7 @@ import os
 import shutil
 import time
 
+from tqdm import tqdm
 import numpy as np
 
 import torch
@@ -59,7 +60,6 @@ def main():
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
     criterion = nn.MSELoss()
 
-    # create a "lazy" batch generator:
     generator = AudioGenerator(audio_dir=args.audio_dir,
                                fft_size=args.fft_size,
                                hop=args.hop,
@@ -77,7 +77,6 @@ def main():
     #generator = AudioGenerator.load(args.model_prefix + '_vect', args)
 
     try:
-        from tqdm import tqdm
         lowest_loss = np.inf
 
         for epoch in range(args.epochs):

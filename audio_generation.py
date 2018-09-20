@@ -66,8 +66,10 @@ class AudioGenerator(object):
                        'num_mel': self.num_mel,
                        'bptt': self.bptt}, f,
                        indent=4)
-            np.save(model_prefix + '_mean.npy', self.mean_.cpu().numpy())
-            np.save(model_prefix + '_var.npy', self.var_.cpu().numpy())
+
+            scale = np.array((self.mean_.cpu().numpy(),
+                              self.var_.cpu().numpy()))
+            np.save(model_prefix + '_scale.npy', scale)
 
     @classmethod
     def load(self, model_prefix, args):
@@ -78,8 +80,8 @@ class AudioGenerator(object):
             for k, v in params.items():
                 args[k] = v
         
-        args['mean_'] = np.load(model_prefix + '_mean.npy')
-        args['var_'] = np.load(model_prefix + '_var.npy')
+        scale = np.load(model_prefix + '_scale.npy')
+        args['mean_'], args['var_'] = scale
 
         return AudioGenerator(**args)
 
