@@ -19,8 +19,7 @@ class LanguageModel(nn.Module):
         self.hidden_dim = hidden_dim
         self.num_layers = num_layers
 
-        self.lstm = nn.LSTM(input_dim, hidden_dim, num_layers,
-                            batch_first=True)
+        self.lstm = nn.LSTM(input_dim, hidden_dim, num_layers)
         self.decoder = nn.Linear(hidden_dim, input_dim)
 
     def forward(self, input_, hidden):

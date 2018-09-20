@@ -20,7 +20,7 @@ def main():
     parser = argparse.ArgumentParser()
 
     # data:
-    parser.add_argument('--audio_dir', type=str, default='/home/nurzia/AUDIO')
+    parser.add_argument('--audio_dir', type=str, default='assets/AUDIO')#'/home/nurzia/AUDIO')
     parser.add_argument('--model_prefix', type=str, default='lm')
 
     # preprocessing:
@@ -34,7 +34,7 @@ def main():
     parser.add_argument('--lowcut', type=int, default=0)
     parser.add_argument('--highcut', type=int, default=8000)
     parser.add_argument('--sample_rate', type=int, default=44100)
-    parser.add_argument('--norm', action='store_true', default=True)
+    parser.add_argument('--norm', action='store_true', default=False)
 
     # model:
     parser.add_argument('--bptt', type=int, default=256)  # expressed in frames, consisting of fft size samples
@@ -73,7 +73,7 @@ def main():
     generator.fit(normalize=args.norm)
 
     try:
-        lowest_loss = np.inf()
+        lowest_loss = np.inf
 
         for epoch in range(args.epochs):
             total_loss = 0.
@@ -82,27 +82,19 @@ def main():
 
             hidden = model.init_hidden(args.batch_size)
 
-            for batch_idx, batch in enumerate(tqdm(generator.get_batches(normalize=args.norm),
+            for batch_idx, (source, targets) in enumerate(tqdm(generator.get_batches(normalize=args.norm),
                                                    total=generator.num_batches)):
                 model.train()
-
-                if args.batch_size > 1:
-                    model.init_hidden(args.batch_size)                    
                 
                 hidden = repackage_hidden(hidden)
                 hidden = tuple([t.to(device) for t in hidden])
 
                 model.zero_grad()
 
-                batch = torch.FloatTensor(batch).to(device)
-
-                output, hidden = model(batch[:, :-1, :], hidden)
+                output, hidden = model(source, hidden)
 
                 output = output.view(-1, args.num_mel)
-
-                targets = batch[:, 1:, :].contiguous().view(-1, args.num_mel)                
-
-                loss = criterion(output, targets)
+                loss = criterion(output, targets.view(-1, args.num_mel))
 
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
@@ -126,9 +118,9 @@ def main():
             print(f'Average loss in epoch {epoch}: {epoch_loss}')
             generator.generate(epoch, model, args.max_gen_len, normalize=args.norm)
 
-            if epoch_loss < best_loss:
-                best_loss = epoch_loss
-                torch.save(model, model_prefix + '_best.pth')
+            if epoch_loss < lowest_loss:
+                lowest_loss = epoch_loss
+                torch.save(model, args.model_prefix + '_best.pth')
 
     except KeyboardInterrupt:
         pass

@@ -58,7 +58,7 @@ class AudioGenerator(object):
                        'highcut': self.highcut,
                        'sample_rate': self.sample_rate,
                        'num_mel': self.num_mel,
-                       'bptt': self.bptt, f,
+                       'bptt': self.bptt},
                        indent=4)
             joblib.dump(self.scaler, model_prefix + '_scaler.pkl')
 
@@ -74,10 +74,17 @@ class AudioGenerator(object):
 
     def fit(self, normalize=False):
         if normalize:
-            self.scaler = StandardScaler()
-            for batch in self.get_batches(normalize=False):
+
+            scaler = StandardScaler() # only used during fitting because of handy partial_fit method
+            
+            for batch, _ in self.get_batches(normalize=False):
+                batch = batch.cpu().numpy()
                 flat_batch = batch.reshape((-1, self.num_mel))
-                self.scaler.partial_fit(flat_batch)
+                scaler.partial_fit(flat_batch)
+
+            self.mean_ = torch.FloatTensor(scaler.mean_).to(self.device)
+            self.var_ = torch.FloatTensor(scaler.var_).to(self.device)
+
         else:
             for batch in self.get_batches(normalize=False):
                 pass
@@ -100,11 +107,12 @@ class AudioGenerator(object):
                 spectrogram_.append(inp.squeeze().cpu().numpy())
             
         mel_spectrogram_ = np.array(spectrogram_)
-        #print('generated spectogram shape:', mel_spectrogram_.shape)
+        print('generated spectogram shape:', mel_spectrogram_.shape)
 
         # 1. unnormalize:
         if normalize:
-            mel_spectrogram_ = self.scaler.inverse_transform(mel_spectrogram_)
+            mel_spectrogram_ *= self.var_.cpu().numpy()
+            mel_spectrogram_ += self.mean_.cpu().numpy()
 
         # 2. out of log domain:
         mel_spectrogram_ = np.exp(mel_spectrogram_)
@@ -122,6 +130,21 @@ class AudioGenerator(object):
         librosa.output.write_wav(y=wave_, sr=self.sample_rate,
                                  path=f'epoch{epoch}.wav', norm=True)
 
+    def batchify(self, data):
+        # Work out how cleanly we can divide the dataset into bsz parts.
+        nbatch = data.size(0) // self.batch_size
+        # Trim off any extra elements that wouldn't cleanly fit (remainders).
+        data = data.narrow(0, 0, nbatch * self.batch_size)
+        # Evenly divide the data across the bsz batches.
+        data = data.view(-1, self.batch_size, self.num_mel)
+        return data.to(self.device)
+
+    def get_batch(self, source, i):
+        seq_len = min(self.bptt, len(source) - 1 - i)
+        data = source[i:i+seq_len]
+        target = source[i+1:i+1+seq_len]
+        return data, target
+
 
     def get_batches(self, normalize=True, sample_rate=44100):
         batch_cnt = 0
@@ -129,7 +152,7 @@ class AudioGenerator(object):
         for file_idx, audio_path in enumerate(self.audio_files):
             #print(audio_path)
 
-            sound_clip, fn_fs = preprocess.read_audio(audio_path, target_fs=sample_rate, duration=None) #!!!
+            sound_clip, fn_fs = preprocess.read_audio(audio_path, target_fs=sample_rate, duration=None)
             
             ### sanity checks: ################################################################
             if sound_clip.shape[0] < self.fft_size:
@@ -155,32 +178,19 @@ class AudioGenerator(object):
             X = np.dot(X.T, self.melW.T)
             X = np.log(X + self.eps)
             X = X.astype(np.float32)
-            
-            # divide into time series:
-            num_time_series = X.shape[0] // (self.bptt + 1)
-            X = X[:num_time_series * (self.bptt + 1)]
-            start_idx, end_idx, batch_series = 0, self.bptt + 1, []
 
-            while end_idx <= X.shape[0]:
-                batch_series.append(X[start_idx : end_idx])
+            batchified = self.batchify(torch.FloatTensor(X))
 
-                if len(batch_series) == self.batch_size or end_idx == X.shape[0] - 1:
-                    batch = np.array(batch_series, dtype='float32')
+            for batch, i in enumerate(range(0, batchified.size(0) - 1, self.bptt)):
+                source, targets = self.get_batch(batchified, i)
 
-                    if normalize:
-                        flat_batch = batch.reshape((-1, self.num_mel))
-                        flat_batch = self.scaler.transform(flat_batch)
-                        yield flat_batch.reshape((batch.shape[0], self.bptt + 1, self.num_mel))
-                    else:
-                        yield batch
+                if normalize:
+                    source.sub_(self.mean_).div_(self.var_)
+                    targets.sub_(self.mean_).div_(self.var_)
 
-                    # reset:
-                    batch_cnt += 1
-                    batch_series = []
+                yield (source, targets)
 
-                # make sure that last timestep is first of next batch
-                start_idx += self.bptt
-                end_idx += self.bptt
+                batch_cnt += 1
                 
             
             if self.max_files and file_idx >= (self.max_files - 1):
