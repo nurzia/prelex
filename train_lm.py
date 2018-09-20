@@ -5,7 +5,6 @@ import os
 import shutil
 import time
 
-from tqdm import tqdm
 import numpy as np
 
 import torch
@@ -52,11 +51,11 @@ def main():
 
     random.seed(args.seed)
     torch.manual_seed(args.seed)
-    device = torch.device('cuda' if args.cuda else 'cpu')
+    args.device = torch.device('cuda' if args.cuda else 'cpu')
 
     model = modelling.LanguageModel(input_dim=args.num_mel, hidden_dim=args.hidden_dim,
                                     num_layers=args.num_layers)
-    model = model.to(device)
+    model = model.to(args.device)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
     criterion = nn.MSELoss()
 
@@ -69,53 +68,51 @@ def main():
                                max_files=args.max_files,
                                bptt=args.bptt,
                                batch_size=args.batch_size,
-                               device=device)
+                               device=args.device)
     generator.fit(normalize=args.norm)
 
+    # test whether we can dump and load the vectorizer:
+    #generator.dump(args.model_prefix + '_vect')
+    #del generator
+    #generator = AudioGenerator.load(args.model_prefix + '_vect', args)
+
     try:
+        from tqdm import tqdm
         lowest_loss = np.inf
 
         for epoch in range(args.epochs):
-            total_loss = 0.
             epoch_losses = []
             start_time = time.time()        
 
             hidden = model.init_hidden(args.batch_size)
 
-            for batch_idx, (source, targets) in enumerate(tqdm(generator.get_batches(normalize=args.norm),
-                                                   total=generator.num_batches)):
+            tqdm_ = tqdm(generator.get_batches(normalize=args.norm),
+                         total=generator.num_batches)
+            tqdm_.set_description(f'Epoch {epoch + 1}')
+
+            for batch_idx, (source, target) in enumerate(tqdm_):
+
                 model.train()
                 
                 hidden = repackage_hidden(hidden)
-                hidden = tuple([t.to(device) for t in hidden])
+                hidden = tuple([t.to(args.device) for t in hidden])
 
                 model.zero_grad()
 
                 output, hidden = model(source, hidden)
 
                 output = output.view(-1, args.num_mel)
-                loss = criterion(output, targets.view(-1, args.num_mel))
+                loss = criterion(output, target.view(-1, args.num_mel))
 
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
                 
                 optimizer.step()
 
-                total_loss += loss.item()
                 epoch_losses.append(loss.item())
-
-                if batch_idx % args.log_interval == 0 and batch_idx > 0:
-                    cur_loss = total_loss / args.log_interval
-                    elapsed = time.time() - start_time
-                    print('| epoch {:3d} | {:5d}/{:5d} series | ms/batch {:5.2f} | '
-                            'loss {:5.5f}'.format(
-                        epoch, batch_idx, generator.num_batches,
-                        elapsed * 1000 / args.log_interval, cur_loss))
-                    total_loss = 0
-                    start_time = time.time()
+                tqdm_.set_postfix(loss=str(round(np.mean(epoch_losses), 5)))
 
             epoch_loss = np.mean(epoch_losses)
-            print(f'Average loss in epoch {epoch}: {epoch_loss}')
             generator.generate(epoch, model, args.max_gen_len, normalize=args.norm)
 
             if epoch_loss < lowest_loss:
