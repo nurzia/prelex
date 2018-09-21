@@ -20,7 +20,7 @@ def main():
     parser = argparse.ArgumentParser()
 
     # data:
-    parser.add_argument('--audio_dir', type=str, default='assets/AUDIO')#'/home/nurzia/AUDIO')
+    parser.add_argument('--audio_dir', type=str, default='/home/nurzia/AUDIO')
     parser.add_argument('--model_prefix', type=str, default='lm')
 
     # preprocessing:
@@ -112,7 +112,9 @@ def main():
                 tqdm_.set_postfix(loss=str(round(np.mean(epoch_losses), 5)))
 
             epoch_loss = np.mean(epoch_losses)
+
             generator.generate(epoch, model, args.max_gen_len, normalize=args.norm)
+            #generator.cluster(model, normalize=args.norm)
 
             if epoch_loss < lowest_loss:
                 lowest_loss = epoch_loss
