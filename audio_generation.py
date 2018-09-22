@@ -25,7 +25,7 @@ from sklearn import svm
 from sklearn.decomposition import PCA
 
 # https://github.com/Azure/DataScienceVM/blob/master/Tutorials/DeepLearningForAudio/Deep%20Learning%20for%20Audio%20Part%201%20-%20Audio%20Processing.ipynb
-# pipeline: wave > spectrogram > mel > log > (normalize)
+# pipeline: wave > spectrogram > mel > log > normalize
 
 
 class AudioGenerator(object):
@@ -97,24 +97,18 @@ class AudioGenerator(object):
 
         return AudioGenerator(**args)
 
-    def fit(self, normalize=False):
-        if normalize:
+    def fit(self):
+        scaler = StandardScaler() # only used during fitting because of handy partial_fit method
 
-            scaler = StandardScaler() # only used during fitting because of handy partial_fit method
+        for batch, _ in self.get_batches():
+            batch = batch.cpu().numpy()
+            flat_batch = batch.reshape((-1, self.num_mel))
+            scaler.partial_fit(flat_batch)
 
-            for batch, _ in self.get_batches(normalize=False):
-                batch = batch.cpu().numpy()
-                flat_batch = batch.reshape((-1, self.num_mel))
-                scaler.partial_fit(flat_batch)
+        self.mean_ = torch.FloatTensor(scaler.mean_).to(self.device)
+        self.var_ = torch.FloatTensor(scaler.var_).to(self.device)
 
-            self.mean_ = torch.FloatTensor(scaler.mean_).to(self.device)
-            self.var_ = torch.FloatTensor(scaler.var_).to(self.device)
-
-        else:
-            for batch in self.get_batches(normalize=False):
-                pass
-
-    def generate(self, epoch, model, max_len, normalize):
+    def generate(self, epoch, model, max_len):
         spectrogram_ = []
 
         model.eval()
@@ -134,9 +128,8 @@ class AudioGenerator(object):
         #print('generated spectogram shape:', mel_spectrogram_.shape)
 
         # 1. unnormalize:
-        if normalize:
-            mel_spectrogram_ *= self.var_.cpu().numpy()
-            mel_spectrogram_ += self.mean_.cpu().numpy()
+        mel_spectrogram_ *= self.var_.cpu().numpy()
+        mel_spectrogram_ += self.mean_.cpu().numpy()
 
         # 2. out of log domain:
         mel_spectrogram_ = np.exp(mel_spectrogram_)
@@ -154,7 +147,7 @@ class AudioGenerator(object):
         librosa.output.write_wav(y=wave_, sr=self.sample_rate,
                                  path=f'epoch{epoch}.wav', norm=True)
 
-    def cluster(self, model, normalize, mode='mean'):
+    def cluster(self, model, mode='mean'):
         assert mode in ('mean', 'last')
         model.eval()
         labels_true, reprs = [], []
@@ -169,8 +162,7 @@ class AudioGenerator(object):
             X = torch.FloatTensor(self.mel_spectrogram(fp))
             X = X.to(self.device)
 
-            if normalize:
-                X.sub_(self.mean_).div_(self.var_)
+            X.sub_(self.mean_).div_(self.var_)
 
             hidden_states = []
             with torch.no_grad():
@@ -281,7 +273,7 @@ class AudioGenerator(object):
         return X.astype(np.float32)
 
 
-    def get_batches(self, normalize=True):
+    def get_batches(self):
         batch_cnt = 0
 
         for file_idx, audio_path in enumerate(self.audio_files):
@@ -292,9 +284,8 @@ class AudioGenerator(object):
             for batch, i in enumerate(range(0, batchified.size(0) - 1, self.bptt)):
                 source, targets = self.get_batch(batchified, i)
 
-                if normalize:
-                    source.sub_(self.mean_).div_(self.var_)
-                    targets.sub_(self.mean_).div_(self.var_)
+                source.sub_(self.mean_).div_(self.var_)
+                targets.sub_(self.mean_).div_(self.var_)
 
                 yield (source, targets)
 

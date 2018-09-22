@@ -34,18 +34,16 @@ def main():
     parser.add_argument('--lowcut', type=int, default=0)
     parser.add_argument('--highcut', type=int, default=8000)
     parser.add_argument('--sample_rate', type=int, default=44100)
-    parser.add_argument('--norm', action='store_true', default=False)
 
     # model:
     parser.add_argument('--bptt', type=int, default=256)  # expressed in frames, consisting of fft size samples
-    parser.add_argument('--batch_size', type=int, default=128)
+    parser.add_argument('--batch_size', type=int, default=256)
     parser.add_argument('--epochs', type=int, default=30)
     parser.add_argument('--cuda', action='store_true', default=False)
     parser.add_argument('--num_layers', type=int, default=1)
     parser.add_argument('--hidden_dim', type=int, default=2048)
-    parser.add_argument('--lr', type=float, default=.001)
+    parser.add_argument('--lr', type=float, default=.0001)
     parser.add_argument('--clip', type=float, default=5.)
-    parser.add_argument('--log-interval', type=int, default=100)
 
     args = parser.parse_args()
     print(args)
@@ -69,7 +67,7 @@ def main():
                                bptt=args.bptt,
                                batch_size=args.batch_size,
                                device=args.device)
-    generator.fit(normalize=args.norm)
+    generator.fit()
 
     # test whether we can dump and load the vectorizer:
     #generator.dump(args.model_prefix + '_vect')
@@ -85,7 +83,7 @@ def main():
 
             hidden = model.init_hidden(args.batch_size)
 
-            tqdm_ = tqdm(generator.get_batches(normalize=args.norm),
+            tqdm_ = tqdm(generator.get_batches(),
                          total=generator.num_batches)
             tqdm_.set_description(f'Epoch {epoch + 1}')
 
@@ -113,8 +111,8 @@ def main():
 
             epoch_loss = np.mean(epoch_losses)
 
-            generator.generate(epoch, model, args.max_gen_len, normalize=args.norm)
-            #generator.cluster(model, normalize=args.norm)
+            generator.generate(epoch, model, args.max_gen_len)
+            #generator.cluster(model)
 
             if epoch_loss < lowest_loss:
                 lowest_loss = epoch_loss
