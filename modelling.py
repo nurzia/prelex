@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from torch.autograd import Variable
+import torch.nn.functional as F
 
 
 def repackage_hidden(h):
@@ -21,10 +21,11 @@ class LanguageModel(nn.Module):
 
         self.lstm = nn.LSTM(input_dim, hidden_dim, num_layers)
         self.decoder = nn.Linear(hidden_dim, input_dim)
+        self.tanh = nn.Tanh()
 
     def forward(self, input_, hidden):
         output, hidden = self.lstm(input_, hidden)
-        output = self.decoder(output)
+        output = self.tanh(self.decoder(output))
         return output, hidden
 
     def init_hidden(self, batch_size):
