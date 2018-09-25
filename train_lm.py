@@ -15,12 +15,15 @@ import modelling
 from modelling import repackage_hidden
 from audio_generation import AudioGenerator
 
+# GRowNG BPTT?
+
 
 def main():
     parser = argparse.ArgumentParser()
 
     # data:
-    parser.add_argument('--audio_dir', type=str, default='/home/nurzia/AUDIO')
+    parser.add_argument('--audio_dir', type=str, default='assets/TRIMMED_AUDIO')
+    parser.add_argument('--spectro_dir', type=str, default='assets/SPECTROGRAMS')
     parser.add_argument('--model_prefix', type=str, default='lm')
 
     # preprocessing:
@@ -33,17 +36,18 @@ def main():
     parser.add_argument('--max_gen_len', type=int, default=300) # expressed in frames, consisting of fft size samples
     parser.add_argument('--lowcut', type=int, default=0)
     parser.add_argument('--highcut', type=int, default=8000)
-    parser.add_argument('--sample_rate', type=int, default=44100)
+    parser.add_argument('--extract', action='store_true', default=False)
+    parser.add_argument('--sample_rate', type=int, default=32000)
 
     # model:
-    parser.add_argument('--bptt', type=int, default=256)  # expressed in frames, consisting of fft size samples
-    parser.add_argument('--batch_size', type=int, default=256)
-    parser.add_argument('--epochs', type=int, default=30)
+    parser.add_argument('--bptt', type=int, default=64)  # expressed in frames, consisting of fft size samples
+    parser.add_argument('--batch_size', type=int, default=128)
+    parser.add_argument('--epochs', type=int, default=100)
     parser.add_argument('--cuda', action='store_true', default=False)
-    parser.add_argument('--num_layers', type=int, default=1)
+    parser.add_argument('--num_layers', type=int, default=2)
     parser.add_argument('--hidden_dim', type=int, default=2048)
     parser.add_argument('--lr', type=float, default=.0001)
-    parser.add_argument('--clip', type=float, default=5.)
+    parser.add_argument('--clip', type=float, default=1.)
 
     args = parser.parse_args()
     print(args)
@@ -55,7 +59,7 @@ def main():
     model = modelling.LanguageModel(input_dim=args.num_mel, hidden_dim=args.hidden_dim,
                                     num_layers=args.num_layers)
     model = model.to(args.device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=1e-5)
     criterion = nn.MSELoss()
 
     generator = AudioGenerator(audio_dir=args.audio_dir,
@@ -66,7 +70,11 @@ def main():
                                max_files=args.max_files,
                                bptt=args.bptt,
                                batch_size=args.batch_size,
-                               device=args.device)
+                               sample_rate=args.sample_rate,
+                               device=args.device,
+                               spectro_dir=args.spectro_dir)
+    if args.extract:
+        generator.dump_spectrograms()
     generator.fit()
 
     # test whether we can dump and load the vectorizer:
@@ -78,8 +86,9 @@ def main():
         lowest_loss = np.inf
 
         for epoch in range(args.epochs):
+            model.train()
             epoch_losses = []
-            start_time = time.time()        
+            start_time = time.time()      
 
             hidden = model.init_hidden(args.batch_size)
 
@@ -89,17 +98,18 @@ def main():
 
             for batch_idx, (source, target) in enumerate(tqdm_):
 
-                model.train()
+                hidden = model.init_hidden(args.batch_size)
                 
                 hidden = repackage_hidden(hidden)
-                hidden = tuple([t.to(args.device) for t in hidden])
 
-                model.zero_grad()
+                optimizer.zero_grad()
 
                 output, hidden = model(source, hidden)
 
                 output = output.view(-1, args.num_mel)
-                loss = criterion(output, target.view(-1, args.num_mel))
+                target = target.view(-1, args.num_mel)
+
+                loss = criterion(output, target)
 
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
@@ -107,12 +117,12 @@ def main():
                 optimizer.step()
 
                 epoch_losses.append(loss.item())
-                tqdm_.set_postfix(loss=str(round(np.mean(epoch_losses), 5)))
+                tqdm_.set_postfix(loss=str(round(np.mean(epoch_losses), 6)))
 
             epoch_loss = np.mean(epoch_losses)
 
             generator.generate(epoch, model, args.max_gen_len)
-            #generator.cluster(model)
+            generator.cluster(model)
 
             if epoch_loss < lowest_loss:
                 lowest_loss = epoch_loss

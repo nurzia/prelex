@@ -21,14 +21,14 @@ class LanguageModel(nn.Module):
 
         self.lstm = nn.LSTM(input_dim, hidden_dim, num_layers)
         self.decoder = nn.Linear(hidden_dim, input_dim)
-        self.tanh = nn.Tanh()
 
     def forward(self, input_, hidden):
         output, hidden = self.lstm(input_, hidden)
-        output = self.tanh(self.decoder(output))
+        output = self.decoder(output)
         return output, hidden
 
     def init_hidden(self, batch_size):
-        return (torch.zeros(self.num_layers, batch_size, self.hidden_dim),
-                torch.zeros(self.num_layers, batch_size, self.hidden_dim))
+        weight = next(self.parameters())
+        return (weight.new_zeros(self.num_layers, batch_size, self.hidden_dim),
+                weight.new_zeros(self.num_layers, batch_size, self.hidden_dim))
 

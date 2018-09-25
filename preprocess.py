@@ -1,5 +1,6 @@
 import numpy as np
 import librosa
+import soundfile as sf
 from tqdm import tqdm
 
 def extract_intervals(fn, allowed={'I0', 'I1', 'I2', 'U0', 'U1', 'U2'}):
@@ -83,8 +84,9 @@ def invert_spectrogram(spectrogram, fft_size, hop):
     return x_reconstruct
 
 
-def read_audio(audio_path, target_fs=None, duration=60):
-    (audio, fs) = librosa.load(audio_path, sr=None, duration=duration)
+def read_audio(audio_path, target_fs=None):
+    #(audio, fs) = librosa.load(audio_path, sr=None)
+    (audio, fs) = sf.read(audio_path)
     # if this is not a mono sounds file
     if audio.ndim > 1:
         audio = np.mean(audio, axis=1)

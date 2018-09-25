@@ -1,6 +1,8 @@
 import glob
 import os
+import shutil
 import json
+from tqdm import tqdm
 
 import numpy as np
 
@@ -13,16 +15,15 @@ import torch.nn as nn
 
 import preprocess
 import librosa
-from scipy.io import wavfile
-import audioread
 from scipy import signal
 
 from sklearn.preprocessing import StandardScaler, LabelEncoder
 from sklearn.externals import joblib
 from sklearn import metrics
 from sklearn import cluster
-from sklearn import svm
+from sklearn import svm, linear_model
 from sklearn.decomposition import PCA
+from sklearn.model_selection import cross_val_score
 
 # https://github.com/Azure/DataScienceVM/blob/master/Tutorials/DeepLearningForAudio/Deep%20Learning%20for%20Audio%20Part%201%20-%20Audio%20Processing.ipynb
 # pipeline: wave > spectrogram > mel > log > normalize
@@ -31,7 +32,7 @@ from sklearn.decomposition import PCA
 class AudioGenerator(object):
 
     def __init__(self, audio_dir, fft_size, hop, num_mel, bptt, batch_size,
-                 device, mean_=None, var_=None, lowcut=70, highcut=8000,
+                 device, spectro_dir, mean_=None, var_=None, lowcut=70, highcut=8000,
                  sample_rate=44100, max_children=None, max_files=None, eps=1e-8,
                  **kwargs):
         self.audio_dir = audio_dir
@@ -47,6 +48,7 @@ class AudioGenerator(object):
         self.batch_size = batch_size
         self.eps = eps
         self.device = device
+        self.spectro_dir = spectro_dir
 
         self.num_batches = None
 
@@ -54,19 +56,12 @@ class AudioGenerator(object):
             self.mean_ = torch.FloatTensor(mean_).to(self.device)
             self.var_ = torch.FloatTensor(var_).to(self.device)
 
-        children = sorted(glob.glob(self.audio_dir + '/*'))
-        if self.max_children:
-            children = children[:self.max_children]
-
-        self.audio_files = []
-        for audio_folder in children:
-            for audio_file in glob.glob(audio_folder + '/*.wav'):
-                self.audio_files.append(audio_file)
-
         self.melW = librosa.filters.mel(sr=self.sample_rate, n_fft=self.fft_size,
                                         n_mels=self.num_mel,
                                         fmin=self.lowcut, fmax=self.highcut)
         self.ham_win = np.hamming(self.fft_size)
+
+        self.fitted_ = False
 
     def dump(self, model_prefix):
         with open(model_prefix + '_params.json', 'w') as f:
@@ -100,13 +95,44 @@ class AudioGenerator(object):
     def fit(self):
         scaler = StandardScaler() # only used during fitting because of handy partial_fit method
 
-        for batch, _ in self.get_batches():
+        print('Fitting scaler...')
+        tqdm_ = tqdm(self.get_batches(), total=self.num_batches)
+        for batch, _ in tqdm_:
             batch = batch.cpu().numpy()
             flat_batch = batch.reshape((-1, self.num_mel))
             scaler.partial_fit(flat_batch)
 
         self.mean_ = torch.FloatTensor(scaler.mean_).to(self.device)
         self.var_ = torch.FloatTensor(scaler.var_).to(self.device)
+
+        self.fitted_ = True
+
+        return self
+
+    def dump_spectrograms(self):
+        children = sorted(glob.glob(self.audio_dir + '/*'))
+        if self.max_children:
+            children = children[:self.max_children]
+
+        audio_files = []
+        for audio_folder in children:
+            for audio_file in glob.glob(audio_folder + '/*.wav'):
+                audio_files.append(audio_file)
+        audio_files = audio_files[:self.max_files]
+
+        try:
+            shutil.rmtree(self.spectro_dir)
+        except FileNotFoundError:
+            pass
+        os.mkdir(self.spectro_dir)
+
+        print('Preprocessing to mel-spectrograms...')
+        for file_idx, audio_path in enumerate(tqdm(audio_files)):
+            X = self.mel_spectrogram(audio_path)
+            newp = os.path.basename(audio_path).replace('.wav', '.mel')
+            newp = os.sep.join((self.spectro_dir, newp))
+            np.save(newp, X)
+
 
     def generate(self, epoch, model, max_len):
         spectrogram_ = []
@@ -152,8 +178,8 @@ class AudioGenerator(object):
         model.eval()
         labels_true, reprs = [], []
 
-        chi_files = list(glob.glob('/home/nurzia/chi_utt/*.wav'))[:100]
-        adu_files = list(glob.glob('/home/nurzia/adu_utt/*.wav'))[:100]
+        chi_files = list(glob.glob('assets/UTT/chi_utt/*.wav'))[:100]
+        adu_files = list(glob.glob('assets/UTT/adu_utt/*.wav'))[:100]
 
         for fp in chi_files + adu_files:
             cat = os.path.basename(fp).split('_')[0]
@@ -167,7 +193,6 @@ class AudioGenerator(object):
             hidden_states = []
             with torch.no_grad():
                 hidden = model.init_hidden(1)
-                hidden = tuple([t.to(self.device) for t in hidden])
                 for x in X:
                     _, hidden = model.lstm(x.view(1, 1, -1), hidden)
                     hidden_states.append(hidden[0].squeeze().cpu().numpy())
@@ -182,11 +207,16 @@ class AudioGenerator(object):
         label_encoder = LabelEncoder()
         labels_true_int = label_encoder.fit_transform(labels_true)
 
+        logreg = linear_model.LogisticRegression(C=1e5)
+        scores = cross_val_score(logreg, reprs, labels_true_int, cv=5)
+        print("Accuracy: %0.2f (+/- %0.2f)" % (scores.mean(), scores.std() * 2))
+
+        """
         clust = cluster.KMeans(n_clusters=2)
         labels_pred = clust.fit_predict(reprs)
         score = metrics.adjusted_rand_score(labels_true_int, labels_pred)
         print('Adjusted rand-score:', score)
-
+        
         pca = PCA(n_components=2)
         pca_X = pca.fit_transform(reprs)
         loadings = pca.components_.transpose()
@@ -217,7 +247,7 @@ class AudioGenerator(object):
         plt.scatter(x1, x2, edgecolors='none', facecolors='none')
         for p1, p2, a in zip(x1, x2, labels_true):
             plt.text(p1, p2, a.lower()[:3], ha='center',
-                va='center', fontdict={'family': 'Arial', 'size': 12})
+                va='center', fontdict={'size': 12})
 
         ax1.set_xlabel('PC1 ('+ str(round(var_exp[0] * 100, 2)) +'%)')
         ax1.set_ylabel('PC2 ('+ str(round(var_exp[1] * 100, 2)) +'%)')
@@ -228,25 +258,10 @@ class AudioGenerator(object):
 
         plt.savefig('pca_mesh.pdf')
         plt.clf()
-
-
-    def batchify(self, data):
-        # Work out how cleanly we can divide the dataset into bsz parts.
-        nbatch = data.size(0) // self.batch_size
-        # Trim off any extra elements that wouldn't cleanly fit (remainders).
-        data = data.narrow(0, 0, nbatch * self.batch_size)
-        # Evenly divide the data across the bsz batches.
-        data = data.view(-1, self.batch_size, self.num_mel)
-        return data.to(self.device)
-
-    def get_batch(self, source, i):
-        seq_len = min(self.bptt, len(source) - 1 - i)
-        data = source[i:i+seq_len]
-        target = source[i+1:i+1+seq_len]
-        return data, target
+        """
 
     def mel_spectrogram(self, audio_path):
-        sound_clip, fn_fs = preprocess.read_audio(audio_path, target_fs=None, duration=None)
+        sound_clip, fn_fs = preprocess.read_audio(audio_path, target_fs=None)
 
         ### sanity checks: ################################################################
         if sound_clip.shape[0] < self.fft_size:
@@ -272,20 +287,35 @@ class AudioGenerator(object):
         X = np.log(X + self.eps)
         return X.astype(np.float32)
 
+    def batchify(self, data):
+        # Work out how cleanly we can divide the dataset into bsz parts.
+        nbatch = data.size(0) // self.batch_size
+        # Trim off any extra elements that wouldn't cleanly fit (remainders).
+        data = data.narrow(0, 0, nbatch * self.batch_size)
+        # Evenly divide the data across the bsz batches.
+        data = data.view(-1, self.batch_size, self.num_mel)
+        return data.to(self.device)
+
+    def get_batch(self, source, i):
+        seq_len = min(self.bptt, len(source) - 1 - i)
+        data = source[i:i+seq_len]
+        target = source[i+1:i+1+seq_len]
+        return data, target
 
     def get_batches(self):
         batch_cnt = 0
 
-        for file_idx, audio_path in enumerate(self.audio_files):
-            X = self.mel_spectrogram(audio_path)
+        for file_idx, mel_path in enumerate(glob.glob(self.spectro_dir + '/*.mel.npy')):
+            X = np.load(mel_path)
 
             batchified = self.batchify(torch.FloatTensor(X))
 
             for batch, i in enumerate(range(0, batchified.size(0) - 1, self.bptt)):
                 source, targets = self.get_batch(batchified, i)
 
-                source.sub_(self.mean_).div_(self.var_)
-                targets.sub_(self.mean_).div_(self.var_)
+                if self.fitted_:
+                    source.sub_(self.mean_).div_(self.var_)
+                    targets.sub_(self.mean_).div_(self.var_)
 
                 yield (source, targets)
 
