@@ -90,7 +90,7 @@ def main():
             epoch_losses = []
             start_time = time.time()      
 
-            hidden = model.init_hidden(args.batch_size)
+            hidden = None
 
             tqdm_ = tqdm(generator.get_batches(),
                          total=generator.num_batches)
@@ -98,9 +98,7 @@ def main():
 
             for batch_idx, (source, target) in enumerate(tqdm_):
 
-                hidden = model.init_hidden(args.batch_size)
-                
-                hidden = repackage_hidden(hidden)
+                #hidden = model.init_hidden(args.batch_size)
 
                 optimizer.zero_grad()
 
@@ -118,6 +116,8 @@ def main():
 
                 epoch_losses.append(loss.item())
                 tqdm_.set_postfix(loss=str(round(np.mean(epoch_losses), 6)))
+
+                hidden = repackage_hidden(hidden)
 
             epoch_loss = np.mean(epoch_losses)
 

@@ -293,7 +293,7 @@ class AudioGenerator(object):
         # Trim off any extra elements that wouldn't cleanly fit (remainders).
         data = data.narrow(0, 0, nbatch * self.batch_size)
         # Evenly divide the data across the bsz batches.
-        data = data.view(-1, self.batch_size, self.num_mel)
+        data = data.view(self.batch_size, -1, self.num_mel).transpose(0, 1).contiguous()
         return data.to(self.device)
 
     def get_batch(self, source, i):
