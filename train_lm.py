@@ -3,7 +3,6 @@ import random
 import glob
 import os
 import shutil
-import time
 
 from tqdm import tqdm
 import numpy as np
@@ -27,10 +26,10 @@ def main():
     parser.add_argument('--model_prefix', type=str, default='lm')
 
     # preprocessing:
-    parser.add_argument('--fft_size', type=int, default=1024) # expressed in samples, not miliseconds!
-    parser.add_argument('--hop', type=int, default=512) # expressed in samples, not miliseconds!
+    parser.add_argument('--fft_size', type=int, default=640) # expressed in samples, not milliseconds!
+    parser.add_argument('--hop', type=int, default=320) # expressed in samples, not milliseconds!
     parser.add_argument('--seed', type=int, default=26711)
-    parser.add_argument('--num_mel', type=int, default=128) # feature dim of the log mel spectrogram https://blogs.technet.microsoft.com/machinelearning/2018/01/30/hearing-ai-getting-started-with-deep-learning-for-audio-on-azure/
+    parser.add_argument('--num_mel', type=int, default=100) # feature dim of the log mel spectrogram https://blogs.technet.microsoft.com/machinelearning/2018/01/30/hearing-ai-getting-started-with-deep-learning-for-audio-on-azure/
     parser.add_argument('--max_children', type=int, default=None)
     parser.add_argument('--max_files', type=int, default=None)
     parser.add_argument('--max_gen_len', type=int, default=300) # expressed in frames, consisting of fft size samples
@@ -40,14 +39,14 @@ def main():
     parser.add_argument('--sample_rate', type=int, default=32000)
 
     # model:
-    parser.add_argument('--bptt', type=int, default=64)  # expressed in frames, consisting of fft size samples
-    parser.add_argument('--batch_size', type=int, default=128)
-    parser.add_argument('--epochs', type=int, default=100)
+    parser.add_argument('--bptt', type=int, default=128)  # expressed in frames, consisting of fft size samples
+    parser.add_argument('--batch_size', type=int, default=256)
+    parser.add_argument('--epochs', type=int, default=300)
     parser.add_argument('--cuda', action='store_true', default=False)
     parser.add_argument('--num_layers', type=int, default=2)
     parser.add_argument('--hidden_dim', type=int, default=2048)
-    parser.add_argument('--lr', type=float, default=.0001)
-    parser.add_argument('--clip', type=float, default=1.)
+    parser.add_argument('--lr', type=float, default=.001)
+    parser.add_argument('--clip', type=float, default=30.)
 
     args = parser.parse_args()
     print(args)
@@ -59,8 +58,10 @@ def main():
     model = modelling.LanguageModel(input_dim=args.num_mel, hidden_dim=args.hidden_dim,
                                     num_layers=args.num_layers)
     model = model.to(args.device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=1e-5)
-    criterion = nn.MSELoss()
+    #optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=1e-5)
+    optimizer = torch.optim.SGD(model.parameters(), lr=args.lr,
+                                momentum=0.9, weight_decay=1e-5)
+    criterion = nn.SmoothL1Loss() #nn.MSELoss()
 
     generator = AudioGenerator(audio_dir=args.audio_dir,
                                fft_size=args.fft_size,
@@ -82,13 +83,18 @@ def main():
     #del generator
     #generator = AudioGenerator.load(args.model_prefix + '_vect', args)
 
+    print('==== RANDOM =====')
+    generator.external_validation(model)
+    print('==== BASELINE ===')
+    generator.baseline()
+    print('===========================')
+
     try:
         lowest_loss = np.inf
 
         for epoch in range(args.epochs):
             model.train()
             epoch_losses = []
-            start_time = time.time()      
 
             hidden = None
 
@@ -98,8 +104,6 @@ def main():
 
             for batch_idx, (source, target) in enumerate(tqdm_):
 
-                #hidden = model.init_hidden(args.batch_size)
-
                 optimizer.zero_grad()
 
                 output, hidden = model(source, hidden)
@@ -108,10 +112,8 @@ def main():
                 target = target.view(-1, args.num_mel)
 
                 loss = criterion(output, target)
-
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
-                
                 optimizer.step()
 
                 epoch_losses.append(loss.item())
@@ -122,7 +124,7 @@ def main():
             epoch_loss = np.mean(epoch_losses)
 
             generator.generate(epoch, model, args.max_gen_len)
-            generator.cluster(model)
+            generator.external_validation(model)
 
             if epoch_loss < lowest_loss:
                 lowest_loss = epoch_loss

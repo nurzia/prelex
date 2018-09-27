@@ -3,6 +3,8 @@ import os
 import shutil
 import json
 from tqdm import tqdm
+import random
+random.seed(13455)
 
 import numpy as np
 
@@ -24,6 +26,7 @@ from sklearn import cluster
 from sklearn import svm, linear_model
 from sklearn.decomposition import PCA
 from sklearn.model_selection import cross_val_score
+from sklearn.metrics import classification_report
 
 # https://github.com/Azure/DataScienceVM/blob/master/Tutorials/DeepLearningForAudio/Deep%20Learning%20for%20Audio%20Part%201%20-%20Audio%20Processing.ipynb
 # pipeline: wave > spectrogram > mel > log > normalize
@@ -50,8 +53,6 @@ class AudioGenerator(object):
         self.device = device
         self.spectro_dir = spectro_dir
 
-        self.num_batches = None
-
         if mean_ is not None and var_ is not None:
             self.mean_ = torch.FloatTensor(mean_).to(self.device)
             self.var_ = torch.FloatTensor(var_).to(self.device)
@@ -61,6 +62,10 @@ class AudioGenerator(object):
                                         fmin=self.lowcut, fmax=self.highcut)
         self.ham_win = np.hamming(self.fft_size)
 
+        # declare a number of properties:
+        self.num_batches = None
+        self.train_files = None
+        self.test_files = None
         self.fitted_ = False
 
     def dump(self, model_prefix):
@@ -93,7 +98,7 @@ class AudioGenerator(object):
         return AudioGenerator(**args)
 
     def fit(self):
-        scaler = StandardScaler() # only used during fitting because of handy partial_fit method
+        scaler = StandardScaler() # only used for fitting because of handy partial_fit method
 
         print('Fitting scaler...')
         tqdm_ = tqdm(self.get_batches(), total=self.num_batches)
@@ -173,92 +178,147 @@ class AudioGenerator(object):
         librosa.output.write_wav(y=wave_, sr=self.sample_rate,
                                  path=f'epoch{epoch}.wav', norm=True)
 
-    def cluster(self, model, mode='mean'):
-        assert mode in ('mean', 'last')
-        model.eval()
-        labels_true, reprs = [], []
+    def melspec_from_file(self, fp, mode='all', min_len=75):
+        X = self.mel_spectrogram(fp)
 
-        chi_files = list(glob.glob('assets/UTT/chi_utt/*.wav'))[:100]
-        adu_files = list(glob.glob('assets/UTT/adu_utt/*.wav'))[:100]
+        if len(X) < min_len:
+            return None
+        else:
+            X = torch.FloatTensor(X).to(self.device)
+            X.sub_(self.mean_).div_(self.var_)        
+            return X.cpu().numpy()
 
-        for fp in chi_files + adu_files:
+    def hidden_from_file(self, model, fp, mode='all', min_len=75):
+        X = torch.FloatTensor(self.mel_spectrogram(fp))
+
+        if len(X) < min_len:
+            return None
+
+        X = X.to(self.device)
+        X.sub_(self.mean_).div_(self.var_)        
+
+        hidden_states = []
+        with torch.no_grad():
+            hidden = None
+            for x in X:
+                _, hidden = model.lstm(x.view(1, 1, -1), hidden)
+                hidden_states.append(hidden[0][-1].squeeze().cpu().numpy())
+
+        hidden_states = np.array(hidden_states)
+        if mode == 'mean':
+            return hidden_states.mean(axis=0)
+        elif mode == 'last':
+            reprs.append(hidden_states[-1])
+        elif mode == 'all':
+            return hidden_states
+
+    def baseline(self, mode='all'):
+        assert self.train_files is not None
+        assert mode in ('all', 'mean')
+
+        train_labels_true, train_reprs = [], []
+        for fp in self.train_files:
             cat = os.path.basename(fp).split('_')[0]
-            labels_true.append(cat)
+            hidden = self.melspec_from_file(fp)
+            if hidden is None:
+                continue
 
-            X = torch.FloatTensor(self.mel_spectrogram(fp))
-            X = X.to(self.device)
-
-            X.sub_(self.mean_).div_(self.var_)
-
-            hidden_states = []
-            with torch.no_grad():
-                hidden = model.init_hidden(1)
-                for x in X:
-                    _, hidden = model.lstm(x.view(1, 1, -1), hidden)
-                    hidden_states.append(hidden[0].squeeze().cpu().numpy())
-
-            hidden_states = np.array(hidden_states)
             if mode == 'mean':
-                reprs.append(hidden_states.mean(axis=0))
-            elif mode == 'last':
-                reprs.append(hidden_states[-1])
+                train_reprs.append(hidden.mean(axis=0))
+                train_labels_true.append(cat)
+            else:
+                train_reprs.extend(hidden)
+                train_labels_true.extend([cat] * len(hidden))    
 
-        reprs = np.array(reprs)
+        train_reprs = np.array(train_reprs)
         label_encoder = LabelEncoder()
-        labels_true_int = label_encoder.fit_transform(labels_true)
+        train_labels_true_int = label_encoder.fit_transform(train_labels_true)
 
-        logreg = linear_model.LogisticRegression(C=1e5)
-        scores = cross_val_score(logreg, reprs, labels_true_int, cv=5)
-        print("Accuracy: %0.2f (+/- %0.2f)" % (scores.mean(), scores.std() * 2))
+        clf = linear_model.SGDClassifier(loss='log', max_iter=1000, tol=1e-3)
+        print('training logreg...')
+        clf.fit(train_reprs, train_labels_true_int)
 
-        """
-        clust = cluster.KMeans(n_clusters=2)
-        labels_pred = clust.fit_predict(reprs)
-        score = metrics.adjusted_rand_score(labels_true_int, labels_pred)
-        print('Adjusted rand-score:', score)
-        
-        pca = PCA(n_components=2)
-        pca_X = pca.fit_transform(reprs)
-        loadings = pca.components_.transpose()
-        var_exp = pca.explained_variance_ratio_
+        print('predicting...')
+        test_labels_true, test_labels_pred = [], []
+        for fp in self.test_files:
+            hidden = self.melspec_from_file(fp)
 
-        clf = svm.SVC(kernel='linear').fit(pca_X, labels_true_int)
+            if hidden is None:
+                continue
 
-        # Step size of the mesh. Decrease to increase the quality of the VQ.
-        h = .02     # point in the mesh [x_min, m_max]x[y_min, y_max].
-        x_min, x_max = pca_X[:, 0].min() - 1, pca_X[:, 0].max() + 1
-        y_min, y_max = pca_X[:, 1].min() - 1, pca_X[:, 1].max() + 1
-        xx, yy = np.meshgrid(np.arange(x_min, x_max, h),
-                         np.arange(y_min, y_max, h))
+            cat = os.path.basename(fp).split('_')[0]
+            test_labels_true.append(cat)
 
-        Z = clf.predict(np.c_[xx.ravel(), yy.ravel()])
-        Z = Z.reshape(xx.shape)
+            if mode == 'all':
+                proba = clf.predict_proba(np.array(hidden)).mean(axis=0)
+            else:
+                proba = clf.predict([np.array(hidden).mean(axis=0)])[0]
 
-        fig = plt.figure(figsize=(10, 10))
-        ax1 = fig.add_subplot(111)
-        plt.contourf(xx, yy, Z, cmap=plt.cm.Paired, alpha=0.8)
+            lab = label_encoder.classes_[proba.argmax()]
+            test_labels_pred.append(lab)
+            if lab != cat:
+                print(f'    - wrongly predicted file: ({lab} instead of {cat}): {fp}')
 
-        ax1.imshow(Z, interpolation='nearest',
-                   extent=(xx.min(), xx.max(), yy.min(), yy.max()),
-                   cmap=plt.cm.Paired,
-                   aspect='auto', origin='lower')
+        print(classification_report(test_labels_true, test_labels_pred))
 
-        x1, x2 = pca_X[:, 0], pca_X[:, 1]
-        plt.scatter(x1, x2, edgecolors='none', facecolors='none')
-        for p1, p2, a in zip(x1, x2, labels_true):
-            plt.text(p1, p2, a.lower()[:3], ha='center',
-                va='center', fontdict={'size': 12})
 
-        ax1.set_xlabel('PC1 ('+ str(round(var_exp[0] * 100, 2)) +'%)')
-        ax1.set_ylabel('PC2 ('+ str(round(var_exp[1] * 100, 2)) +'%)')
+    def external_validation(self, model, mode='all'):
+        assert mode in ('mean', 'last', 'all')
+        model.eval()
 
-        plt.xlim(x_min, x_max)
-        plt.ylim(y_min, y_max)
-        plt.tight_layout()
+        if self.train_files is None:
+            chi_files = list(glob.glob('assets/UTT/chi_utt/*.wav'))#[:100]
+            adu_files = list(glob.glob('assets/UTT/adu_utt/*.wav'))#[:100]
 
-        plt.savefig('pca_mesh.pdf')
-        plt.clf()
-        """
+            both_files = chi_files + adu_files
+            random.shuffle(both_files)
+            self.train_files = sorted(both_files[:int(len(both_files) / 100 * 90)])
+            self.test_files = sorted(both_files[int(len(both_files) / 100 * 90):])
+
+        train_labels_true, train_reprs = [], []
+        for fp in self.train_files:
+            cat = os.path.basename(fp).split('_')[0]
+            hidden = self.hidden_from_file(model, fp, mode)
+
+            if hidden is None:
+                continue
+
+            if mode in ('mean', 'last'):
+                train_reprs.append(hidden)
+                train_labels_true.append(cat)
+            else:
+                train_reprs.extend(hidden)
+                train_labels_true.extend([cat] * len(hidden))    
+
+        train_reprs = np.array(train_reprs)
+        label_encoder = LabelEncoder()
+        train_labels_true_int = label_encoder.fit_transform(train_labels_true)
+
+        clf = linear_model.SGDClassifier(loss='log', max_iter=1000, tol=1e-3)
+        print('training logreg...')
+        clf.fit(train_reprs, train_labels_true_int)
+
+        print('predicting...')
+        test_labels_true, test_labels_pred = [], []
+        for fp in self.test_files:
+            hidden = self.hidden_from_file(model, fp, mode)
+            if hidden is None:
+                continue
+
+            cat = os.path.basename(fp).split('_')[0]
+            test_labels_true.append(cat)
+
+            if mode == 'all':
+                proba = clf.predict_proba(np.array(hidden)).mean(axis=0)
+            else:
+                proba = clf.predict([np.array(hidden)])[0]
+
+            lab = label_encoder.classes_[proba.argmax()]
+            test_labels_pred.append(lab)
+            if lab != cat:
+                print(f'    - wrongly predicted file: ({lab} instead of {cat}): {fp}')
+
+        print(classification_report(test_labels_true, test_labels_pred))
 
     def mel_spectrogram(self, audio_path):
         sound_clip, fn_fs = preprocess.read_audio(audio_path, target_fs=None)

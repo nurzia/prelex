@@ -70,24 +70,8 @@ def mark_spectro(spectro_length, num_frames,
     return overlaps
 
 
-def invert_spectrogram(spectrogram, fft_size, hop):
-    """
-    out of log > de-apply mel filters > convert spectrogram > normalize
-    """
-    x_reconstruct = audio_utilities.reconstruct_signal_griffin_lim(spectrogram,
-                                                                   fft_size,
-                                                                   hopsamp=hop,
-                                                                   iterations=1000)
-    max_sample = np.max(abs(x_reconstruct))
-    if max_sample > 1.0:
-        x_reconstruct = x_reconstruct / max_sample
-    return x_reconstruct
-
-
 def read_audio(audio_path, target_fs=None):
-    #(audio, fs) = librosa.load(audio_path, sr=None)
     (audio, fs) = sf.read(audio_path)
-    # if this is not a mono sounds file
     if audio.ndim > 1:
         audio = np.mean(audio, axis=1)
     if target_fs is not None and fs != target_fs:
